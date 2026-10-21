@@ -10,6 +10,14 @@ export function subjectPath(subject,exams){
   const names=(subject?.exam_ids||[]).map(id=>exams.find(e=>e.id===id)?.name||'Unresolved exam');
   return `${names.join(' / ')||'Unassigned exam'} → ${subject?.name||'Unassigned subject'}`;
 }
+// Availability follows the same published ancestry as the student catalog.
+// No saved flag: publishing/unpublishing a test updates this on catalog reload.
+export function examHasPublishedTests(c,examId){
+  const visible=visibleCatalog(c);
+  if(!visible.exams.some(exam=>exam.id===examId))return false;
+  const subjects=new Set(visible.subjects.filter(s=>s.exam_ids.includes(examId)).map(s=>s.id));
+  return visible.tests.some(test=>subjects.has(test.subject_id));
+}
 export function subjectExam(c,subject,requested){
   if(!subject)return null;
   const matches=c.exams.filter(e=>subject.exam_ids.includes(e.id));
