@@ -48,10 +48,26 @@ approval depending on it. Reverting text does not revive an invalidated resoluti
 Same-fact links survive ordinary edits and newly linked evidence requires review
 of both occurrences.
 
-Duplicate/missing original source IDs are immutable source-integrity blockers and
+Duplicate/missing/invalid original source IDs are immutable source-integrity blockers and
 cannot be waived. Explicitly exclude the conflicting occurrence or use a corrected
 source in a new empty destination. A targeted working-field repair recomputes only
 the validation supported by that field; it never removes unrelated source findings.
+
+Source IDs accept nonblank intact strings and safe integers (including zero). Blank,
+null, boolean, object, array and unsafe numeric IDs are blocked. An explicitly invalid
+`id` never falls back to `number`; a number-only canonical record remains supported
+when no `id` property exists. Original values stay in the raw archive. Internal
+occurrence keys such as `s1q1` identify the working record, not its original source ID.
+
+Canonical option IDs must be intact, unique, nonblank strings without boundary
+whitespace. They are never generated, trimmed or coerced into a guessed answer
+mapping. Invalid original canonical IDs require explicit exclusion or a corrected
+source; an explanation edit or review resolution cannot waive them. Valid source
+array options use position-derived `option-0` IDs; PDF labels use `option-A` IDs.
+The archived source format, original array/index or PDF block, and working mapping
+make these supported derivations traceable. Canonical JSON with duplicate property
+declarations or non-finite numeric literals is blocked instead of silently accepting
+the last answer/option value. Exact source bytes remain privately archived.
 
 PDF explanation declarations retain every occurrence with its block line and
 original question identity. Identical declarations consolidate only in the working
@@ -118,12 +134,12 @@ tests, private archives, source banks and server credentials are not shipped.
 
 ## Development verification (2026-10-23)
 
-- 222 Node automated tests passed, including database/security/importer suites and
-  35 Smart Import parser tests plus 10 staging database lifecycle checks.
-- 233 browser scenarios/check groups passed across source and generated artifact:
-  18 + 21 + 6 + 9 + 63 + 15 + 18 + 1 + 1 + 10 + 8 + 63. The two aggregate
+- 230 Node automated tests passed, including database/security/importer suites and
+  42 Smart Import parser tests plus 11 staging database lifecycle checks (53 focused).
+- 235 browser scenarios/check groups passed across source and generated artifact:
+  18 + 21 + 6 + 9 + 64 + 15 + 18 + 1 + 1 + 10 + 8 + 64. The two aggregate
   static/SEO checks cover multiple assertions and are each counted once.
-- 35 parser tests also passed in local Deno 2.9.6; the academy-api TypeScript
+- 42 parser tests also passed in local Deno 2.9.6; the academy-api TypeScript
   entrypoint passed Deno checking. This does not substitute for a later controlled
   synthetic smoke test under the actual hosted Edge CPU/memory limits.
 - JavaScript syntax checked for 66 files; four JSON/manifest files parsed; restricted
@@ -137,3 +153,9 @@ tests, private archives, source banks and server credentials are not shipped.
   all four option positions, replacement/control/decoding artifacts, truncation,
   post-cleanup empty options, and valid Unicode. Browser checks exercise the complete
   conflicting-PDF correction/resolution flow at 320px without installing its content.
+- Independent re-review additionally covers invalid/blank/non-scalar original IDs,
+  valid numeric/string IDs, missing/duplicate/ambiguous canonical option IDs, strict
+  answer mapping, unrelated edits retaining all other blockers, and duplicate JSON
+  property/non-finite literal rejection. Browser and HTTP/database checks confirm
+  malformed identities cannot install, while original bytes/records remain intact.
+  The SQL migration was not changed by these parser fixes.

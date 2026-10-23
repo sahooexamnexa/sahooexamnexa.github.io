@@ -147,3 +147,77 @@ test('same-fact links survive unrelated edits; invalidated resolutions never rev
  b=reviewItem(b,{key:'s1q1',decision:'edit',reason:evidence,question:{...b.items[0].working,correctIndex:0,explanation:old}});
  assert.ok(b.items[1].unresolved.some(f=>f.code==='same_fact_candidate'));assert.equal(b.report.pass2,'pending');
 });
+
+const canonicalRecord=()=>({id:'original-q1',number:1,text:'Which canonical synthetic option is first?',options:['Alpha','Beta','Gamma','Delta'].map((text,i)=>({id:'o'+i,text})),correctOptionId:'o0',explanation:'Alpha is the first controlled synthetic option.',tags:[],topic:'Computer'});
+const canonicalSource=records=>({name:'canonical.html',expectedCount:records.length,base64:Buffer.from('<script type="application/json" id="sahoo-mock-data">'+JSON.stringify({questionCount:records.length,questions:records})+'</script>').toString('base64')});
+
+test('invalid original IDs remain traceable and blocked despite unrelated edits or fallback numbering',async()=>{
+ for(const id of ['', ' \t ',null,{},[],true,false,1.5,Number.MAX_SAFE_INTEGER+1,'broken\u0000id','id�']){
+  const raw={...record(),id,number:99};let b=await stageSources([source([raw])]);
+  assert.equal(b.items[0].key,'s1q1');assert.deepEqual(b.items[0].sourceId,id);assert.deepEqual(b.items[0].raw,raw);
+  assert.ok(b.items[0].unresolved.some(f=>f.code==='source_id'));assert.equal(b.report.pass1,'blocked');
+  b=reviewItem(b,{key:'s1q1',decision:'edit',reason:evidence,question:{...b.items[0].working,correctIndex:0,explanation:'Changed explanation cannot change original identity.'}});
+  b=resolveContent(b,'s1q1');assert.ok(b.items[0].unresolved.some(f=>f.code==='source_id'));
+  for(const decision of ['approve','resolve'])assert.throws(()=>reviewItem(b,{key:'s1q1',decision,findingId:'source_id',reason:evidence}));
+  assert.deepEqual(b.items[0].raw,raw);
+ }
+ const raw=record();delete raw.id;const b=await stageSources([source([raw])]);assert.ok(b.items[0].unresolved.some(f=>f.code==='source_id'));assert.equal(b.items[0].sourceId,null);
+});
+
+test('valid numeric/string source IDs and canonical number-only records retain exact identity',async()=>{
+ for(const id of [0,1,-1,Number.MAX_SAFE_INTEGER,'q-1','001','ଓଡ଼ିଆ-୧']){
+  const b=await stageSources([source([{...record(),id}])]);assert.equal(b.report.pass1,'passed');assert.equal(b.items[0].sourceId,id);assert.equal(b.items[0].raw.id,id);
+ }
+ const raw=canonicalRecord();delete raw.id;const b=await stageSources([canonicalSource([raw])]);assert.equal(b.report.pass1,'passed');assert.equal(b.items[0].sourceId,1);assert.ok(!Object.hasOwn(b.items[0].raw,'id'));
+});
+
+test('duplicate source identity still blocks numeric/string collisions without merging occurrences',async()=>{
+ const records=[record(7),{...record('7'),question_statement:'A different question with the repeated source identity?'}];let b=await stageSources([source(records)]);
+ assert.equal(b.items.length,2);assert.deepEqual(b.items.map(i=>i.sourceId),[7,'7']);assert.ok(b.items[1].unresolved.some(f=>f.code==='source_id'));
+ b=reviewItem(b,{key:'s1q2',decision:'edit',reason:evidence,question:{...b.items[1].working,correctIndex:0,topic:'Another topic'}});
+ assert.ok(b.items[1].unresolved.some(f=>f.code==='source_id'));assert.deepEqual(b.items.map(i=>i.raw),records);
+});
+
+test('canonical option IDs are never fabricated or coerced, and ambiguous originals cannot be waived',async()=>{
+ for(const id of [undefined,null,'',' ',123,{},[],true,' o0','o0 ','o0�']){
+  const q=canonicalRecord();if(id===undefined)delete q.options[0].id;else q.options[0].id=id;
+  // This formerly guessed option-0 when a canonical ID was absent.
+  q.correctOptionId='option-0';let b=await stageSources([canonicalSource([q])]);
+  assert.equal(b.report.pass1,'blocked');assert.ok(b.items[0].unresolved.some(f=>f.code==='source_option_ids'));assert.ok(b.items[0].unresolved.some(f=>f.code==='answer_mapping'));
+  assert.equal(b.items[0].working.options[0].id,typeof id==='string'?id:null);assert.equal(b.items[0].working.correctOptionId,q.correctOptionId);
+  b=reviewItem(b,{key:'s1q1',decision:'edit',reason:evidence,question:{...b.items[0].working,correctIndex:0,explanation:'An unrelated edit must not generate an ID or repair source mapping.'}});
+  b=resolveContent(b,'s1q1');assert.ok(b.items[0].unresolved.some(f=>f.code==='source_option_ids'));
+  assert.throws(()=>reviewItem(b,{key:'s1q1',decision:'resolve',findingId:'source_option_ids',reason:evidence}));assert.throws(()=>reviewItem(b,{key:'s1q1',decision:'approve',reason:evidence}));assert.deepEqual(b.items[0].raw,q);
+ }
+ const q=canonicalRecord();q.options[1].id='o0';const b=await stageSources([canonicalSource([q])]);
+ assert.ok(b.items[0].unresolved.some(f=>f.code==='source_option_ids'));assert.ok(b.items[0].unresolved.some(f=>f.code==='answer_mapping'));assert.deepEqual(b.items[0].working.options,q.options);
+});
+
+test('canonical answer mapping is strict while valid HTML/PDF derived IDs remain traceable',async()=>{
+ for(const correctOptionId of [null,0,'0','o4','O0',' o0','o0 ']){
+  const q={...canonicalRecord(),correctOptionId},b=await stageSources([canonicalSource([q])]);assert.ok(b.items[0].unresolved.some(f=>f.code==='answer_mapping'));assert.deepEqual(b.items[0].raw,q);
+ }
+ const canonical=canonicalRecord(),b=await stageSources([canonicalSource([canonical]),source([record()]),{name:'fixture.pdf',expectedCount:1,base64:textPdf(lines).toString('base64')}]);
+ assert.equal(b.report.pass1,'passed');assert.deepEqual(b.sources.map(s=>s.format),['sahoo-canonical-v1','const-questions-data-v1','pdf-lines-v1']);
+ assert.deepEqual(b.items[0].working.options,canonical.options);assert.equal(b.items[0].working.correctOptionId,'o0');
+ assert.deepEqual(b.items[1].raw.options,record().options);assert.equal(b.items[1].raw.correct,0);assert.equal(b.items[1].working.correctOptionId,'option-0');
+ assert.match(b.items[2].raw.sourceBlock,/Answer: A/);assert.equal(b.items[2].working.correctOptionId,'option-A');
+});
+
+test('cross-field edits cannot clear other damaged fields or original identity findings',async()=>{
+ const q={...canonicalRecord(),id:'',text:'A damaged � question?',correctOptionId:'absent',explanation:'Damaged explanation �'};q.options[2].text='Gamma�';
+ let b=await stageSources([canonicalSource([q])]);const original=structuredClone(b.items[0].raw);
+ for(const patch of [{topic:'Other topic'},{text:'A repaired synthetic question?'},{explanation:'A repaired explanation with explicit source evidence.'}]){
+  const before=b.items[0].working;b=reviewItem(b,{key:'s1q1',decision:'edit',reason:evidence,question:{...before,correctIndex:null,...patch}});
+  for(const code of ['source_id','option_text_2','answer_mapping'])assert.ok(b.items[0].unresolved.some(f=>f.code===code),code);
+  assert.equal(b.report.pass1,'blocked');assert.equal(b.report.pass2,'pending');assert.deepEqual(b.items[0].raw,original);
+ }
+});
+
+test('canonical duplicate properties and non-finite numeric literals are archived and blocked, never last-write-wins',async()=>{
+ const json=JSON.stringify({questionCount:1,questions:[canonicalRecord()]});
+ for(const malformed of [json.replace('"correctOptionId":"o0"','"correctOptionId":"o0","correctOptionId":"o1"'),json.replace('"id":"o0"','"id":"o0","id":"o1"'),json.replace('"questionCount":1','"questionCount":1,"questionCount":1'),json.replace('"number":1','"number":1e999')]){
+  const bytes=Buffer.from('<script type="application/json" id="sahoo-mock-data">'+malformed+'</script>'),f={name:'ambiguous.html',expectedCount:1,base64:bytes.toString('base64')},b=await stageSources([f]);
+  assert.equal(b.sources[0].base64,f.base64);assert.equal(b.report.pass1,'blocked');assert.equal(b.report.pass2,'pending');assert.equal(b.report.parsed,0);assert.ok(b.sources[0].errors.length);
+ }
+});

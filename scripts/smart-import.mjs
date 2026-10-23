@@ -1,6 +1,6 @@
 // Server-only staging adapter. Source bytes and raw records never enter the public build.
 import {createHash} from 'node:crypto';
-import {extractArray,sourcePypTags} from './source-array-import.mjs';
+import {extractArray,parseDataLiteral,sourcePypTags} from './source-array-import.mjs';
 const clone=x=>JSON.parse(JSON.stringify(x));
 const hash=x=>createHash('sha256').update(x).digest('hex');
 // Only delimited, reviewed artifact forms are removed; ordinary prose is never guessed away.
@@ -8,6 +8,8 @@ export const cleanText=value=>typeof value==='string'?value.replaceAll('🟢',''
 const norm=s=>cleanText(s).normalize('NFKC').toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu,' ').trim();
 const issue=(code,reason,stage='structure',related=null)=>({code,reason,stage,severity:'blocking',suggestion:stage==='content'?'Verify against an authoritative reference; record evidence or reject this occurrence.':'Correct from the original source; never guess missing content.',related});
 const damaged=s=>typeof s==='string'&&/[\uFFFD\u0000-\u0008\u000B\u000C\u000E-\u001F]|(?:\.{3}|…)\s*$|(?:Ã[\u0080-\u00BF]|Â[\u0080-\u00BF]|â€|ðŸ|à¬|à\u00AD)/u.test(s);
+const validSourceId=id=>Number.isSafeInteger(id)||typeof id==='string'&&!!id.trim()&&!damaged(id);
+const validOptionId=id=>typeof id==='string'&&!!id.trim()&&id===id.trim()&&!damaged(id);
 
 export function auditItem(q){
  const findings=[];
@@ -16,8 +18,9 @@ export function auditItem(q){
  if(opts.length!==4||opts.some(o=>!o.text||!o.id))findings.push(issue('options','Exactly four usable options with stable IDs are required.'));
  opts.forEach((o,i)=>{if(!cleanText(o.text)||damaged(o.text)||damaged(o.id))findings.push(issue('option_text_'+i,'Option '+(i+1)+' is empty after cleaning, corrupted or visibly truncated. Correct from source evidence.'));});
  if(new Set(opts.map(o=>o.id)).size!==opts.length)findings.push(issue('option_ids','Duplicate option IDs.'));
+ if(opts.some(o=>!validOptionId(o.id)))findings.push(issue('option_identity','Option IDs must be intact, nonblank strings without boundary whitespace. Canonical IDs are never invented or coerced.'));
  if(new Set(opts.map(o=>norm(o.text))).size!==opts.length)findings.push(issue('duplicate_options','Repeated option text can make multiple choices correct.'));
- if(!q.correctOptionId||damaged(q.correctOptionId)||opts.filter(o=>o.id===q.correctOptionId).length!==1)findings.push(issue('answer_mapping','Exactly one intact answer ID must reference an existing option.'));
+ if(!validOptionId(q.correctOptionId)||opts.filter(o=>o.id===q.correctOptionId).length!==1)findings.push(issue('answer_mapping','Exactly one intact answer ID must reference an existing option.'));
  if(!cleanText(q.explanation)||damaged(q.explanation))findings.push(issue('explanation_text','Explanation is missing, corrupted or visibly truncated. Correct from source evidence.'));
  if(damaged(q.topic)||q.tags.some(damaged))findings.push(issue('label_text','Topic or PYP label contains damaged text.'));
  if(!q.explanation||q.explanation.length<20)findings.push(issue('explanation_quality','Explanation is missing or too brief to support the answer.','content'));
@@ -32,7 +35,7 @@ export function auditItem(q){
 function canonical(raw,i,format){
  const q=raw&&typeof raw==='object'&&!Array.isArray(raw)?raw:{};
  const sourceArray=format==='const-questions-data-v1';
- const options=(Array.isArray(q.options)?q.options:[]).map((o,j)=>({id:sourceArray?'option-'+j:typeof o?.id==='string'?o.id:'option-'+j,text:cleanText(sourceArray?o:o?.text)}));
+ const options=(Array.isArray(q.options)?q.options:[]).map((o,j)=>({id:sourceArray?'option-'+j:typeof o?.id==='string'?o.id:null,text:cleanText(sourceArray?o:o?.text)}));
  // Only explicitly delimited source labels/metadata are used. Never scan question prose.
  return {id:'pending',number:i+1,text:cleanText(sourceArray?q.question_statement:q.text),options,
  correctOptionId:sourceArray?(Number.isInteger(q.correct)?'option-'+q.correct:null):typeof q.correctOptionId==='string'?q.correctOptionId:null,
@@ -86,7 +89,11 @@ function htmlRecords(html){
  if(start<0)return {records:extractArray(html).data,format:'const-questions-data-v1'};
  const end=html.indexOf('</script>',start+marker.length);
  if(end<0||html.indexOf(marker,start+marker.length)>=0)throw Error('Ambiguous/truncated canonical JSON.');
- const data=JSON.parse(html.slice(start+marker.length,end));if(!Array.isArray(data.questions))throw Error('No canonical question array.');
+ const json=html.slice(start+marker.length,end),data=JSON.parse(json);
+ // JSON.parse silently keeps the last duplicate property. Validate the literal
+ // tree too, so conflicting answer/option declarations cannot disappear.
+ parseDataLiteral(json);
+ if(!Array.isArray(data.questions))throw Error('No canonical question array.');
  return {records:data.questions,declared:data.questionCount,format:'sahoo-canonical-v1'};
 }
 export function duplicateFindings(items){
@@ -155,12 +162,17 @@ export async function stageSources(files,{pdfExtractor=extractPdf}={}){
    else{const text=new TextDecoder('utf-8',{fatal:true}).decode(bytes),parsed=htmlRecords(text);records=parsed.records;format=parsed.format;if(parsed.declared!==undefined&&parsed.declared!==records.length)s.errors.push('Declared canonical count differs from extracted count.');}
    if(!Array.isArray(records))throw Error('No static question array.');s.parsedCount=records.length;
   }catch(error){s.errors.push('Extraction blocked: '+String(error.message).slice(0,250));}
+  s.format=format??null;
   if(s.parsedCount!==s.expectedCount)s.errors.push('Expected '+s.expectedCount+'; parsed '+s.parsedCount+'. No installation allowed; correct/re-export the source.');
   const ids=new Set();
   records.forEach((raw,i)=>{
    const key='s'+(index+1)+'q'+(i+1),q=canonical(raw,i,format),sourceFindings=[];q.id=key;
-   const sourceId=raw?.id??raw?.number;
-   if(sourceId===undefined||ids.has(String(sourceId)))sourceFindings.push(issue('source_id','Missing or duplicate source ID in this file.'));ids.add(String(sourceId));
+   // An explicitly invalid id must not fall back to another field. Internal keys
+   // track occurrences independently and never masquerade as original source IDs.
+   const sourceId=raw!=null&&Object.hasOwn(raw,'id')?raw.id:raw?.number;
+   if(!validSourceId(sourceId)||ids.has(String(sourceId)))sourceFindings.push(issue('source_id','Invalid, missing or duplicate original source ID in this file. Preserve the occurrence; exclude it or supply a corrected source.'));
+   if(validSourceId(sourceId))ids.add(String(sourceId));
+   if(format==='sahoo-canonical-v1'&&(q.options.some(o=>!validOptionId(o.id))||new Set(q.options.map(o=>o.id)).size!==q.options.length))sourceFindings.push(issue('source_option_ids','Canonical source option IDs are missing, invalid or duplicated. Do not guess the original answer mapping; exclude this occurrence or supply a corrected source.'));
    if(raw?.unparsed)sourceFindings.push(issue('unparsed_text','Unaccounted text after answer/source label; inspect the preserved block.'));
    if(raw?.multipleAnswers)sourceFindings.push(issue('multiple_answers','Multiple answer declarations in source.'));
    if(raw?.explanationConflict)sourceFindings.push(issue('explanation_conflict','Conflicting explanation declarations. Inspect every private candidate and explicitly resolve the working explanation.'));
@@ -174,7 +186,8 @@ export function reviewItem(batch,payload){
  if(!['approve','keep','reject','remove','edit','resolve'].includes(payload.decision)||typeof payload.reason!=='string'||payload.reason.trim().length<20)throw Error('Decision and meaningful evidence/reason required.');
  if(payload.decision==='edit'){
   const q=payload.question;if(!q||!Array.isArray(q.options))throw Error('Editable question required.');
-  item.working={...item.working,text:cleanText(q.text),options:q.options.map((o,i)=>({id:item.working.options[i]?.id||'option-'+i,text:cleanText(o.text)})),explanation:cleanText(q.explanation),tags:sourcePypTags(q),topic:cleanText(q.topic)};
+  const format=b.sources[item.sourceIndex].format;
+  item.working={...item.working,text:cleanText(q.text),options:q.options.map((o,i)=>({id:i<item.working.options.length?item.working.options[i].id:format==='const-questions-data-v1'?'option-'+i:format==='pdf-lines-v1'&&i<4?'option-'+String.fromCharCode(65+i):null,text:cleanText(o?.text)})),explanation:cleanText(q.explanation),tags:sourcePypTags(q),topic:cleanText(q.topic)};
   item.working.correctOptionId=Number.isInteger(q.correctIndex)?item.working.options[q.correctIndex]?.id??null:null;
   item.edited=true;item.review={...item.review,decision:'pending',reason:payload.reason};
   // Source findings survive edits. Evidence-scoped resolutions remain independently
@@ -182,7 +195,7 @@ export function reviewItem(batch,payload){
  }else if(payload.decision==='resolve'){
   const finding=item.findings.find(f=>f.id===payload.findingId);
   if(!finding)throw Error('Select one current finding to resolve.');
-  if(finding.stage==='structure'&&!['explanation_conflict','multiple_answers','unparsed_text'].includes(finding.code))throw Error('Correct the underlying evidence first. Immutable source-ID conflicts require excluding the conflicting occurrence or a corrected source.');
+  if(finding.stage==='structure'&&!['explanation_conflict','multiple_answers','unparsed_text'].includes(finding.code))throw Error('Correct the underlying evidence first. Immutable source/option-ID conflicts require excluding the conflicting occurrence or a corrected source.');
   if(['explanation_conflict','multiple_answers','unparsed_text'].includes(finding.code)&&auditItem(item.working).some(f=>f.stage==='structure'))throw Error('Correct the working fields from the source before resolving this source finding.');
   item.resolutions={...item.resolutions,[finding.id]:{evidence:finding.evidence,reason:payload.reason.trim()}};
   item.review={...item.review,decision:'pending'};

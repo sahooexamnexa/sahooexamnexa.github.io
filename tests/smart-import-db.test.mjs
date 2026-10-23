@@ -19,7 +19,11 @@ test('smart staging database lifecycle and authorization are fail-closed',async 
  const fingerprint=async()=>JSON.stringify((await db.query("select (select jsonb_agg(t) from public.tests t) tests,(select jsonb_agg(q) from public.questions q) questions,(select jsonb_agg(i) from public.imports i) imports,(select jsonb_agg(a) from public.attempts a) attempts,(select jsonb_agg(p) from public.profiles p) profiles,(select jsonb_agg(s) from public.admin_settings s) settings")).rows);
  await t.test('forward migration preserves existing content/settings/roles and grants no browser access',async()=>{
   const before=await fingerprint();await db.exec(fs.readFileSync('supabase/migrations/202610210001_smart_import.sql','utf8'));assert.equal(await fingerprint(),before);
-  for(const role of ['anon','authenticated']){assert.equal((await db.query("select has_table_privilege($1,'public.smart_import_batches','select') allowed",[role])).rows[0].allowed,false);assert.equal((await db.query("select has_function_privilege($1,'public.academy_api(uuid,text,jsonb)','execute') allowed",[role])).rows[0].allowed,false);}
+  for(const role of ['anon','authenticated']){
+   for(const permission of ['SELECT','INSERT','UPDATE','DELETE'])assert.equal((await db.query("select has_table_privilege($1,'public.smart_import_batches',$2) allowed",[role,permission])).rows[0].allowed,false);
+   for(const fn of ['academy_api','academy_before_smart_api'])assert.equal((await db.query("select has_function_privilege($1,$2,'execute') allowed",[role,'public.'+fn+'(uuid,text,jsonb)'])).rows[0].allowed,false);
+  }
+  assert.equal((await db.query("select relrowsecurity from pg_class where oid='public.smart_import_batches'::regclass")).rows[0].relrowsecurity,true);
  });
  const handler=makeHandler({rpc,getUser:async token=>({id:token,email_confirmed_at:'2026-01-01'}),config:{origins:['https://fixture.invalid']},inspectHtml:inspectUploadedHtml});
  const call=async(action,payload={},who=admin)=>{const r=await handler(new Request('https://fixture.invalid',{method:'POST',headers:{'content-type':'application/json',origin:'https://fixture.invalid',...(who?{authorization:'Bearer '+who}:{})},body:JSON.stringify({action,payload})}));return {status:r.status,data:await r.json()};};
@@ -69,6 +73,23 @@ test('smart staging database lifecycle and authorization are fail-closed',async 
   assert.equal((await review({decision:'approve'})).status,400);assert.equal((await call('adminSmartFinalize',{batchId:b.id,expectedRevision:b.revision})).status,400);
   assert.equal((await db.query("select count(*)::int n from public.questions where test_id='source-conflict'")).rows[0].n,0);
   assert.deepEqual((await db.query('select original_items from public.smart_import_batches where id=$1',[b.id])).rows[0].original_items.map(i=>i.raw),records);
+ });
+ await t.test('invalid source and canonical option IDs cannot be repaired accidentally, waived or installed',async()=>{
+  await save('tests',{...draft,id:'invalid-identities',published:false});
+  const records=[{id:null,number:1,text:'Which synthetic canonical option is first?',options:['Alpha','Beta','Gamma','Delta'].map(text=>({text})),correctOptionId:'option-0',explanation:'Alpha is first in the original controlled fixture.',tags:[],topic:'Computer'}];
+  const html='<script type="application/json" id="sahoo-mock-data">'+JSON.stringify({questionCount:1,questions:records})+'</script>';
+  let r=await call('adminSmartUpload',{testId:'invalid-identities',files:[{name:'identity.html',expectedCount:1,base64:Buffer.from(html).toString('base64')}]});assert.equal(r.status,200);let b=r.data;
+  const original=JSON.stringify((await db.query('select sources,original_items from public.smart_import_batches where id=$1',[b.id])).rows[0]);
+  const review=extra=>call('adminSmartReview',{batchId:b.id,expectedRevision:b.revision,key:'s1q1',reason:'Only synthetic evidence is used for this isolated review.',...extra});
+  r=await review({decision:'edit',question:{...b.state.items[0].working,correctIndex:0,explanation:'An unrelated explanation change must not invent source mappings.'}});assert.equal(r.status,200);b=r.data;
+  for(const code of ['source_id','source_option_ids','answer_mapping'])assert.ok(b.state.items[0].unresolved.some(f=>f.code===code));
+  for(const findingId of ['source_id','source_option_ids'])assert.equal((await review({decision:'resolve',findingId})).status,400);
+  assert.equal((await review({decision:'approve'})).status,400);assert.equal((await call('adminSmartFinalize',{batchId:b.id,expectedRevision:b.revision})).status,400);
+  assert.equal((await db.query("select count(*)::int n from public.questions where test_id='invalid-identities'")).rows[0].n,0);
+  assert.equal(JSON.stringify((await db.query('select sources,original_items from public.smart_import_batches where id=$1',[b.id])).rows[0]),original);
+  await assert.rejects(db.query("update public.smart_import_batches set original_items='[]' where id=$1",[b.id]));
+  await assert.rejects(db.query('delete from public.smart_import_batches where id=$1',[b.id]));
+  assert.equal((await call('adminSmartUpdate',{batchId:b.id,expectedRevision:b.revision,state:{report:{pass2:'approved'}}})).status,400);
  });
  }finally{await db.close();}
 });
