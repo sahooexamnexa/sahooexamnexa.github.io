@@ -1,4 +1,5 @@
 // Dependency-injected transport. All authorization and Telegram calls run on the server.
+import {stageSources,reviewItem,filterBatch} from '../../../scripts/smart-import.mjs';
 export const PUBLIC_ACTIONS=new Set(['policy','catalog']);
 const ACTIONS=new Set([...PUBLIC_ACTIONS,'account','updateProfile','access','orders','createOrder','submitPayment','results','result','saveAttempt','submitAttempt','beginSocialLink','verify','start','adminOrderList','adminReorder','adminDeletePreview','adminDelete','adminQuestions','adminSaveQuestion','adminReviewQuestions','adminList','adminSave','adminReviewPayment','adminAccess','adminImportHtml','adminImportDetail','adminVerifyContent']);
 export const sha256=async s=>Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(s))),b=>b.toString(16).padStart(2,'0')).join('');
@@ -14,6 +15,7 @@ export async function checkTelegram({token,chatId,userId,fetcher=fetch}){
   try{const bot=await member(Number(token.split(':')[0]));if(!['administrator','creator'].includes(bot.status))return {status:'unavailable',verified:false};const verified=isMember(await member(userId));return {status:verified?'verified':'not_member',verified};}catch{return {status:'unavailable',verified:false};}
 }
 export function makeHandler({rpc,getUser,config,inspectHtml,fetcher=fetch}){
+  for(const action of ['adminSmartUpload','adminSmartList','adminSmartDetail','adminSmartReview','adminSmartFilter','adminSmartFinalize'])ACTIONS.add(action);
   return async request=>{
     const origin=request.headers.get('origin');const allowed=config.origins.includes(origin);
     const headers={'content-type':'application/json','cache-control':'no-store','vary':'Origin',...(allowed?{'access-control-allow-origin':origin,'access-control-allow-headers':'authorization, apikey, content-type, x-client-info','access-control-allow-methods':'POST, OPTIONS'}:{})};
@@ -54,6 +56,16 @@ export function makeHandler({rpc,getUser,config,inspectHtml,fetcher=fetch}){
         if(data.status==='denied')return reply(200,action==='verify'?{...freeAccess,status:'requirements_unmet',checks:[{provider:'telegram',required:true,status:'unavailable',linked}]}:{...data,freeAccess:{...freeAccess,status:'verification_unavailable',checks:[{provider:'telegram',required:true,status:'unavailable',linked}]}});
         if(action==='verify')return reply(200,data.status==='eligible'?freeAccess:{...freeAccess,status:'test_unavailable'});
         return reply(200,data);
+      }
+      if(action==='adminSmartUpload'){
+        const state=await stageSources(payload.files);
+        return reply(200,await rpc(actor,'adminSmartCreate',{testId:payload.testId,state}));
+      }
+      if(action==='adminSmartReview'||action==='adminSmartFilter'){
+        const batch=await rpc(actor,'adminSmartDetail',{batchId:payload.batchId});
+        if(batch.revision!==payload.expectedRevision)return reply(409,{error:'Batch changed; reload before review'});
+        const state=action==='adminSmartReview'?reviewItem(batch.state,payload):filterBatch(batch.state,payload.filter);
+        return reply(200,await rpc(actor,'adminSmartUpdate',{batchId:batch.id,expectedRevision:batch.revision,state}));
       }
       if(action==='adminImportHtml'){
         if(typeof payload.html!=='string'||!Number.isInteger(payload.expectedCount)||payload.expectedCount<1)return reply(400,{error:'HTML and exact expected question count required'});

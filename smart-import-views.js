@@ -1,0 +1,44 @@
+// Admin-only staged review UI. Server checks identity, revisions and publication gates.
+export function createSmartImportViews({gateway,get,escape:e,render,admin}){
+ let files=[],detail=null,key='',message='',busy=false,generation=0,draftTestId='';
+ const input=(name,label,value='',type='text')=>`<div class="field"><label for="smart-${name}">${e(label)}</label><input id="smart-${name}" name="${name}" type="${type}" value="${e(value)}"></div>`;
+ const area=(name,label,value='')=>`<div class="field"><label for="smart-${name}">${e(label)}</label><textarea id="smart-${name}" name="${name}">${e(value)}</textarea></div>`;
+ const select=(name,label,options,value)=>`<div class="field"><label for="smart-${name}">${e(label)}</label><select id="smart-${name}" name="${name}">${options.map(([id,text])=>`<option value="${e(id)}" ${id===value?'selected':''}>${e(text)}</option>`).join('')}</select></div>`;
+ function clear(){files=[];detail=null;key='';message='';draftTestId='';generation++;}
+ async function perform(fn){if(busy||!admin())return;busy=true;message='';render();try{await fn();generation++;}catch(error){message=error.message||'Review could not be saved.';}finally{busy=false;render();}}
+ function view(){
+  const batches=get('smart-batches:'+generation,'adminSmartList',{});
+  if(!batches)return '<p role="status">Loading private source review…</p>';
+  if(batches.error)return '<p class="notice warning">Smart imports are unavailable until the reviewed server and migration are installed. Existing HTML Imports remain available.</p>';
+  const item=detail?.state.items.find(i=>i.key===key)||detail?.state.items[0];
+  return `<p role="status">${e(message)}</p><section class="card"><h2>Smart MCQ Import & Audit</h2><p>Private staging only. Nothing auto-publishes. Upload HTML/PDF sources together (1 MB combined); enter the exact count for each file. Text PDFs must use numbered questions, A–D options, Answer: A, Explanation: text and optional PYP: label lines. Scanned or unsupported layouts are blocked, never guessed.</p><p>Factual correctness, ambiguity, explanation quality, relevance and PYP authenticity require evidence. Automated findings are review prompts, not verified facts.</p><form data-smart="upload"><fieldset ${busy?'disabled':''}><div class="form-grid">${input('testId','Existing empty draft test ID',draftTestId)}<label>HTML/PDF sources<input type="file" name="sources" accept=".html,.htm,.pdf" multiple></label>${files.map((f,i)=>input('count'+i,'Exact source count — '+f.name,'','number')).join('')}</div><button class="btn">Stage sources and run audit</button></fieldset></form></section>
+  <section class="card mt"><h2>Private staged batches</h2>${batches.map(b=>`<p>${e(b.testId)} · ${b.report.parsed} parsed · ${b.finalized?'Installed as draft':'Review pending'} <button class="btn secondary" data-smart-open="${e(b.id)}">Open staged review</button></p>`).join('')||'<p>No staged batches.</p>'}</section>
+  ${detail?`<section class="card mt"><h2>Audit report</h2><pre class="backend-json">${e(JSON.stringify(detail.state.report,null,2))}</pre><p>Target count is advisory: we never invent questions or silently cap qualifying records. If fewer qualify, accept the smaller reviewed set, upload more sources in another batch/test, or add the remainder manually after review.</p><form data-smart="filter"><fieldset ${busy||detail.finalized?'disabled':''}><div class="form-grid">${select('criterion','Selection criteria',[['all','All questions'],['important','Reviewer-marked important'],['pyp','Explicit PYP labels (provenance must be reviewed)'],['pyp-important','PYP or reviewer-marked important']],detail.state.filter.criterion)}${input('requested','Requested count (optional)',detail.state.filter.requested??'','number')}</div><button class="btn secondary">Apply filter</button></fieldset></form>
+  <label>Question occurrence<select data-smart-item>${detail.state.items.map(i=>`<option value="${e(i.key)}" ${i.key===item?.key?'selected':''}>${e(i.key)} · source Q${e(i.sourceId??'?')} · ${e(i.review.decision)}</option>`).join('')}</select></label>
+  ${item?`<article class="review-item"><h3>${e(item.key)} · ${e(detail.state.sources[item.sourceIndex].name)} · original Q${e(item.sourceId??'?')}</h3><pre class="backend-json">${e(JSON.stringify(item.findings,null,2))}</pre><form data-smart="review"><fieldset ${busy||detail.finalized?'disabled':''}><div class="form-grid">${area('text','Question',item.working.text)}${item.working.options.length!==4?'<p class="notice">Source has '+item.working.options.length+' options. Correct all four fields from the source before approval.</p>':''}${[0,1,2,3].map(i=>area('option'+i,'Option '+String.fromCharCode(65+i),item.working.options[i]?.text||'')).join('')}${select('correctIndex','Exactly one correct answer',[['','Not supplied'],...['A','B','C','D'].map((v,i)=>[String(i),v])],String(item.working.options.findIndex(o=>o.id===item.working.correctOptionId)))}${area('explanation','Explanation',item.working.explanation)}${area('tags','Explicit reviewed PYP labels (one per line)',item.working.tags.join('\n'))}${input('topic','Source topic label',item.working.topic)}${select('decision','Review decision',[['keep','Keep pending'],['approve','Approve with evidence'],['edit','Save manual correction (reopens review)'],['reject','Reject from selection'],['remove','Remove from working selection; preserve archive']], 'keep')}${area('reason','Evidence/reference and reason (at least 20 characters)')}${input('factKey','Reviewed same-fact key (optional)',item.review.factKey||'')}<label><input type="checkbox" name="important" ${item.review.important?'checked':''}> Reviewed important/high-yield</label></div><p>Edits apply only with “Save manual correction”. Approval attests you resolved every listed content finding, including duplicates. Structural blockers must be corrected first.</p><button class="btn">Save review decision</button></fieldset></form><details><summary>Private original occurrence</summary><pre class="backend-json">${e(JSON.stringify(item.raw,null,2))}</pre></details></article>`:''}
+  <form data-smart="finalize"><fieldset ${busy||detail.finalized||detail.state.report.pass2!=='approved'?'disabled':''}><label><input type="checkbox" name="confirm" required> Install only the selected reviewed questions into the existing Hidden/Draft test. Keep every original source privately.</label><button class="btn mt">Install selected draft questions</button></fieldset></form><p>After installation, the existing HTML Imports content pass and explicit test publication remain separate actions.</p></section>`:''}`;
+ }
+ document.addEventListener('change',event=>{
+  if(!admin())return;
+  if(event.target.matches('[data-smart="upload"] input[type=file]')){draftTestId=event.target.form.elements.testId.value;files=[...event.target.files];render();}
+  if(event.target.matches('[data-smart-item]')){key=event.target.value;render();}
+ });
+ document.addEventListener('click',event=>{const b=event.target.closest('[data-smart-open]');if(b)perform(async()=>{detail=await gateway.call('adminSmartDetail',{batchId:b.dataset.smartOpen});key='';});});
+ document.addEventListener('submit',event=>{
+  const form=event.target,kind=form.dataset.smart;if(!kind||!admin())return;event.preventDefault();const data=Object.fromEntries(new FormData(form));
+  const selectedFiles=[...files];
+  perform(async()=>{
+   if(kind==='upload'){
+    if(!selectedFiles.length||selectedFiles.reduce((n,f)=>n+f.size,0)>1024*1024)throw Error('Choose HTML/PDF sources up to 1 MB combined.');
+    const sources=[];for(const [i,f] of selectedFiles.entries()){const bytes=new Uint8Array(await f.arrayBuffer());let binary='';for(const byte of bytes)binary+=String.fromCharCode(byte);sources.push({name:f.name,base64:btoa(binary),expectedCount:Number(data['count'+i])});}
+    detail=await gateway.call('adminSmartUpload',{testId:data.testId,files:sources});files=[];key='';
+   }else{
+    if(!detail)throw Error('Open a batch first.');const payload={batchId:detail.id,expectedRevision:detail.revision};
+    if(kind==='filter')detail=await gateway.call('adminSmartFilter',{...payload,filter:{criterion:data.criterion,requested:data.requested?Number(data.requested):null}});
+    if(kind==='review')detail=await gateway.call('adminSmartReview',{...payload,key:key||detail.state.items[0]?.key,decision:data.decision,reason:data.reason,important:data.important==='on',factKey:data.factKey,question:{text:data.text,options:[0,1,2,3].map(i=>({text:data['option'+i]})),correctIndex:data.correctIndex===''?null:Number(data.correctIndex),explanation:data.explanation,tags:data.tags.split('\n'),topic:data.topic}});
+    if(kind==='finalize'){if(data.confirm!=='on')throw Error('Explicit confirmation required.');detail=await gateway.call('adminSmartFinalize',payload);}
+   }
+  });
+ });
+ return {view,clear};
+}

@@ -1,0 +1,97 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {stageSources,reviewItem,filterBatch,parsePdfText,extractPdf,cleanText} from '../scripts/smart-import.mjs';
+export const record=(id=1)=>({id,chapter:'Computer',question_statement:'Which synthetic value is shown for record '+id+'?',options:['Alpha','Beta','Gamma','Delta'],correct:0,explanation:'Alpha is explicitly the answer in this synthetic fixture.',tags:[]});
+export const source=(records,name='fixture.html',expectedCount=records.length)=>({name,expectedCount,base64:Buffer.from('<script>const questions='+JSON.stringify(records)+';function UI(){return questions;}</script>').toString('base64')});
+export function textPdf(lines){
+ const stream='BT /F1 12 Tf 40 780 Td '+lines.map((line,i)=>(i?'0 -18 Td ':'')+'('+line.replace(/[\\()]/g,'\\$&')+') Tj').join('\n')+' ET';
+ const objs=['<< /Type /Catalog /Pages 2 0 R >>','<< /Type /Pages /Kids [3 0 R] /Count 1 >>','<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 842] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>','<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>','<< /Length '+Buffer.byteLength(stream)+' >>\nstream\n'+stream+'\nendstream'];
+ let pdf='%PDF-1.4\n',offsets=[0];for(const [i,o]of objs.entries()){offsets.push(Buffer.byteLength(pdf));pdf+=(i+1)+' 0 obj\n'+o+'\nendobj\n';}const xref=Buffer.byteLength(pdf);pdf+='xref\n0 6\n0000000000 65535 f \n'+offsets.slice(1).map(o=>String(o).padStart(10,'0')+' 00000 n \n').join('')+'trailer << /Size 6 /Root 1 0 R >>\nstartxref\n'+xref+'\n%%EOF';return Buffer.from(pdf);
+}
+const lines=['1. Which synthetic option is first?','A. Alpha','B. Beta','C. Gamma','D. Delta','Answer: A','Explanation: Alpha is the first listed synthetic option.','PYP: Odisha Police SI 2023'];
+test('100Q static HTML is exact and originals/options/Unicode remain accounted for',async()=>{
+ const records=Array.from({length:100},(_,i)=>record(i+1));records[0].question_statement+=' ଓଡ଼ିଆ';const f=source(records),b=await stageSources([f]);
+ assert.equal(b.report.parsed,100);assert.equal(b.report.added,0);assert.equal(b.report.removed,0);assert.equal(b.sources[0].base64,f.base64);assert.deepEqual(b.items[0].raw,records[0]);assert.match(b.items[0].working.text,/ଓଡ଼ିଆ/);assert.equal(b.report.pass2,'pending');
+});
+test('real binary PDF extraction uses static text and preserves explicit source labels',async()=>{
+ const bytes=textPdf(lines),text=await extractPdf(bytes);assert.match(text,/Answer: A/);
+ const b=await stageSources([{name:'fixture.pdf',expectedCount:1,base64:bytes.toString('base64')}]);assert.equal(b.report.parsed,1);assert.equal(b.report.pass1,'passed');assert.deepEqual(b.items[0].working.tags,['Odisha Police SI 2023']);assert.equal(b.items[0].working.correctOptionId,'option-A');
+});
+test('mixed HTML/PDF files preserve separate source IDs and order',async()=>{
+ const b=await stageSources([source([record()]),{name:'fixture.pdf',expectedCount:1,base64:textPdf(lines).toString('base64')}]);assert.equal(b.items.length,2);assert.deepEqual(b.items.map(i=>i.key),['s1q1','s2q1']);assert.equal(b.sources.length,2);
+});
+for(const [name,patch,code]of [['missing option',{options:['A','B','C']},'options'],['duplicate option',{options:['A','A','C','D']},'duplicate_options'],['invalid answer',{correct:8},'answer_mapping'],['no answer',{correct:null},'answer_mapping'],['malformed text',{question_statement:'...'},'question_text']])test(name+' is retained and blocked',async()=>{const b=await stageSources([source([{...record(),...patch}])]);assert.equal(b.items.length,1);assert.ok(b.items[0].findings.some(f=>f.code===code));assert.throws(()=>reviewItem(b,{key:'s1q1',decision:'approve',reason:'Evidence review must not override structure.'}));});
+test('unreadable/truncated/dynamic sources are archived with fail-closed reconciliation',async()=>{
+ for(const html of ['<script>const questions=[','<script>const questions=makeBank();</script>']){const b=await stageSources([{name:'broken.html',expectedCount:10,base64:Buffer.from(html).toString('base64')}]);assert.equal(b.report.parsed,0);assert.equal(b.report.pass1,'blocked');assert.ok(b.sources[0].errors.length);}
+ const b=await stageSources([source([record()],'count.html',2)]);assert.equal(b.report.pass1,'blocked');assert.equal(b.items.length,1);
+});
+test('duplicate IDs flagged; exact/near content retained with relationships',async()=>{
+ const a=record(),b=record(2);b.question_statement=a.question_statement;const c=record(3);c.question_statement='Which synthetic value is shown for record 1 please?';
+ const batch=await stageSources([source([a,b,c,a])]);assert.equal(batch.items.length,4);assert.ok(batch.report.exactDuplicates);assert.ok(batch.report.nearDuplicates);assert.ok(batch.items[3].findings.some(f=>f.code==='source_id'));
+});
+test('same topic distinct facts are not duplicates; reviewed fact keys link semantic candidates',async()=>{
+ let b=await stageSources([source([{...record(),question_statement:'Which device stores permanent firmware?'},{...record(2),question_statement:'How many binary digits form one byte?'}])]);assert.equal(b.report.duplicateRelationships.length,0);
+ for(const key of ['s1q1','s1q2'])b=reviewItem(b,{key,decision:'keep',factKey:'reviewed-fact-identifier',reason:'Admin identifies same underlying fact for comparison.'});assert.equal(b.report.sameFactCandidates,1);
+});
+test('only explicit supported PYP metadata survives; no inference from prose/file/chapter/explanation',async()=>{
+ const q={...record(),tags:['MCQ PDF','Book','Notes','Custom','History','🟢','Odisha Police SI 2023']};const b=await stageSources([source([q,{...record(2),question_statement:'Odisha Police SI 2023 asks which value?',chapter:'OPSC 2020'}],'OPSC 2022.html')]);assert.deepEqual(b.items[0].working.tags,['Odisha Police SI 2023']);assert.deepEqual(b.items[1].working.tags,[]);assert.deepEqual(b.items[0].raw.tags,q.tags);
+});
+test('green emoji and citation artifacts are removed from all student fields, not raw',async()=>{
+ const q={...record(),question_statement:'Question 🟢 [cite: 15] content?',options:['One [cite: 1]','Two 🟢','Three','Four'],explanation:'Explanation [cite: 2] with source content 🟢',chapter:'Topic [cite: 3] 🟢',tags:['[cite: 2]']};const b=await stageSources([source([q])]);assert.doesNotMatch(JSON.stringify(b.items[0].working),/🟢|\[cite:/);assert.deepEqual(b.items[0].raw,q);assert.equal(cleanText('ଓଡ଼ିଆ [cite: 2]'),'ଓଡ଼ିଆ');
+});
+test('requested 100 with only 86 reviewed important questions reports shortfall without fabrication',async()=>{
+ let b=await stageSources([source(Array.from({length:86},(_,i)=>({...record(i),question_statement:'Synthetic unique fixture '+i+' with choices?'})))]);
+ // Reviewed importance is an Admin decision, never inferred from uploaded source.
+ b.items.forEach(i=>i.review={decision:'approve',reason:'Synthetic evidence checked against controlled fixture.',important:true});b=filterBatch(b,{criterion:'important',requested:100});assert.equal(b.report.selected,86);assert.equal(b.report.shortfall,14);assert.equal(b.report.added,0);assert.equal(b.items.length,86);
+});
+test('manual correction reopens content review and keeps raw source immutable',async()=>{
+ let b=await stageSources([source([record()])]);const original=structuredClone(b.items[0].raw);
+ b=reviewItem(b,{key:'s1q1',decision:'approve',reason:'Verified against the authoritative synthetic specification.'});assert.equal(b.report.pass2,'approved');
+ b=reviewItem(b,{key:'s1q1',decision:'edit',reason:'Corrected explanation from the original specification.',question:{...b.items[0].working,correctIndex:0,explanation:'Updated explanation from a reviewed synthetic source.'}});assert.equal(b.report.pass2,'pending');assert.deepEqual(b.items[0].raw,original);
+ b=reviewItem(b,{key:'s1q1',decision:'remove',reason:'Owner explicitly excludes this occurrence from working selection.'});assert.equal(b.report.selected,0);assert.equal(b.items.length,1);assert.equal(b.report.removed,1);
+});
+test('PDF missing/multiple answers and unsupported trailing text stay blocked',()=>{
+ const q=parsePdfText(lines.concat('Answer: B').join('\n'))[0];assert.equal(q.correctOptionId,null);assert.ok(q.multipleAnswers);
+ assert.throws(()=>parsePdfText('Scanned image without numbered MCQs'));
+});
+
+test('multiple PDF sources reconcile individually without combining duplicate source IDs',async()=>{
+ const bytes=textPdf(lines),files=['first.pdf','second.pdf'].map(name=>({name,expectedCount:1,base64:bytes.toString('base64')}));
+ const b=await stageSources(files);assert.equal(b.report.parsed,2);assert.equal(b.report.sourceCount,2);assert.equal(b.report.pass1,'passed');assert.equal(b.report.exactDuplicates,1);assert.equal(b.items.length,2);assert.deepEqual(b.sources.map(s=>s.base64),files.map(f=>f.base64));
+});
+
+test('image-only PDF and invalid PDF are preserved but blocked without invented questions',async()=>{
+ for(const bytes of [textPdf([]),Buffer.from('%PDF-broken')]){
+  const b=await stageSources([{name:'unreadable.pdf',expectedCount:1,base64:bytes.toString('base64')}]);
+  assert.equal(b.report.parsed,0);assert.equal(b.report.pass1,'blocked');assert.equal(b.sources[0].base64,bytes.toString('base64'));assert.ok(b.sources[0].errors.length);
+ }
+});
+
+test('source safety budget, unsupported types and nonpositive counts fail closed',async()=>{
+ const f=source([record()]);
+ for(const bad of [{...f,base64:Buffer.alloc(1024*1024+1).toString('base64')},{...f,name:'bank.exe'},{...f,expectedCount:0},{...f,base64:'%%%'}])await assert.rejects(stageSources([bad]));
+});
+
+test('canonical HTML remains supported with exact declared count and stable option IDs',async()=>{
+ const q={id:'q1',number:1,text:'Which canonical fixture option is first?',options:['one','two','three','four'].map((text,i)=>({id:'o'+i,text})),correctOptionId:'o0',explanation:'The canonical fixture explicitly selects option one.',tags:[]};
+ const f={name:'canonical.html',expectedCount:1,base64:Buffer.from('<script type="application/json" id="sahoo-mock-data">'+JSON.stringify({questionCount:1,questions:[q]})+'</script>').toString('base64')};
+ const b=await stageSources([f]);assert.equal(b.report.pass1,'passed');assert.deepEqual(b.items[0].working.options,q.options);assert.equal(b.items[0].working.correctOptionId,'o0');assert.deepEqual(b.items[0].raw,q);
+});
+
+test('all four filters retain source order, report exclusions and never impose a target cap',async()=>{
+ let b=await stageSources([source([record(1),{...record(2),tags:['OSSSC PEO 2023']},record(3)])]);
+ b.items[0].review.important=true;
+ for(const [criterion,keys]of [['all',['s1q1','s1q2','s1q3']],['important',['s1q1']],['pyp',['s1q2']],['pyp-important',['s1q1','s1q2']]]){
+  const f=filterBatch(b,{criterion,requested:1});assert.deepEqual(f.selectedKeys,keys);assert.equal(f.report.parsed,3);assert.equal(f.report.filteredOut,3-keys.length);
+ }
+});
+
+test('new same-fact relationships reopen related approvals and source-wide findings remain visible',async()=>{
+ let b=await stageSources([source([{...record(1),question_statement:'Which device stores permanent firmware?'},{...record(2),question_statement:'How many binary digits form a byte?'},{...record(3),correct:null}])]);
+ const evidence='All synthetic alternatives and explanations checked against fixture.';
+ b=reviewItem(b,{key:'s1q1',decision:'approve',reason:evidence,factKey:'same'});
+ b=reviewItem(b,{key:'s1q2',decision:'keep',reason:evidence,factKey:'same'});
+ assert.equal(b.items[0].review.decision,'pending');
+ b=reviewItem(b,{key:'s1q3',decision:'reject',reason:'This broken occurrence is explicitly excluded, never silently lost.'});
+ assert.equal(b.report.pass1,'blocked');assert.equal(b.report.selectedPass1,'passed');assert.equal(b.report.parsed,3);assert.equal(b.report.rejected,1);
+});
