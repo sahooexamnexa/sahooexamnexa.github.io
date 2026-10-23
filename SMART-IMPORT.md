@@ -37,11 +37,33 @@ occurrences stay visible in the source report without certifying them as repaire
 Pass 2 lists unresolved factual-answer consistency, ambiguity, explanation quality,
 relevance and (when present) PYP-provenance checks. **Automation does not certify
 facts or provenance.** An Admin must inspect all alternatives and provide evidence
-before approving each occurrence. Structural errors cannot be overridden by an
-approval. The review choices are keep pending, edit, approve, reject, and remove
+before approving each occurrence. Resolve each finding individually with its own
+evidence/reason, then approve only when none remain unresolved. The review choices
+are keep pending, edit, resolve a selected finding, approve, reject, and remove
 from working selection. All retain the private raw archive and audit trail.
-Corrections reopen prior approvals. Newly linked same-fact evidence reopens the
-related prior approval as well.
+Each resolution is bound to the particular evidence it reviewed. An unrelated
+edit cannot clear source findings; unchanged PYP evidence can retain its separate
+resolution. Changed evidence invalidates the affected resolution and reopens any
+approval depending on it. Reverting text does not revive an invalidated resolution.
+Same-fact links survive ordinary edits and newly linked evidence requires review
+of both occurrences.
+
+Duplicate/missing original source IDs are immutable source-integrity blockers and
+cannot be waived. Explicitly exclude the conflicting occurrence or use a corrected
+source in a new empty destination. A targeted working-field repair recomputes only
+the validation supported by that field; it never removes unrelated source findings.
+
+PDF explanation declarations retain every occurrence with its block line and
+original question identity. Identical declarations consolidate only in the working
+copy. Differing declarations leave the working explanation unset and create a
+source conflict. Admin sees all private candidates, saves the selected/revised
+explanation, then explicitly resolves the conflict before approval.
+
+Question, option, answer-ID and explanation validation rejects replacement/control
+characters, known decoding artifacts and visibly truncated endings. Empty options
+after artifact cleanup are also blocked. These checks do not invent replacement
+text and cannot recognize every possible semantic truncation; factual/ambiguity
+review remains necessary. Valid English/Odia/Unicode is retained.
 
 Exact duplicates compare normalized wording and ordered options. Near duplicates
 use conservative token overlap and are candidates for review, not factual judgments.
@@ -96,16 +118,22 @@ tests, private archives, source banks and server credentials are not shipped.
 
 ## Development verification (2026-10-23)
 
-- 208 Node automated tests passed, including database/security/importer suites and
-  22 Smart Import parser tests plus 9 staging database lifecycle checks.
-- 231 browser scenarios/check groups passed across source and generated artifact:
-  18 + 21 + 6 + 9 + 62 + 15 + 18 + 1 + 1 + 10 + 8 + 62. The two aggregate
+- 222 Node automated tests passed, including database/security/importer suites and
+  35 Smart Import parser tests plus 10 staging database lifecycle checks.
+- 233 browser scenarios/check groups passed across source and generated artifact:
+  18 + 21 + 6 + 9 + 63 + 15 + 18 + 1 + 1 + 10 + 8 + 63. The two aggregate
   static/SEO checks cover multiple assertions and are each counted once.
-- 22 parser tests also passed in local Deno 2.9.6; the academy-api TypeScript
+- 35 parser tests also passed in local Deno 2.9.6; the academy-api TypeScript
   entrypoint passed Deno checking. This does not substitute for a later controlled
   synthetic smoke test under the actual hosted Edge CPU/memory limits.
-- JavaScript syntax checked for 65 files; four JSON/manifest files parsed; restricted
+- JavaScript syntax checked for 66 files; four JSON/manifest files parsed; restricted
   artifact allowlist checked (35 files), Google verification file unchanged,
   dependency audit reported zero vulnerabilities, and `git diff --check` passed.
 - All database/browser mutations used disposable isolated fixtures. No production
   migration, publication, import, settings change, merge or deployment occurred.
+- Blocker regressions cover unrelated edits retaining duplicate-source-ID blockers,
+  targeted repairs, independently retained PYP resolutions, same-fact link retention
+  and invalidation, identical/conflicting PDF explanations, explicit resolution,
+  all four option positions, replacement/control/decoding artifacts, truncation,
+  post-cleanup empty options, and valid Unicode. Browser checks exercise the complete
+  conflicting-PDF correction/resolution flow at 320px without installing its content.

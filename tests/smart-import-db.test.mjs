@@ -42,6 +42,7 @@ test('smart staging database lifecycle and authorization are fail-closed',async 
  });
  await t.test('edit/review/filter preserve raw source, allow owner-selected shortfall and remain private',async()=>{
   const edit=await call('adminSmartReview',{batchId:batch.id,expectedRevision:batch.revision,key:'s1q1',decision:'edit',reason:'Correcting synthetic wording against the original fixture.',question:{...batch.state.items[0].working,text:'Which fixture option is first? ଓଡ଼ିଆ',correctIndex:0}});assert.equal(edit.status,200);batch=edit.data;assert.deepEqual(batch.state.items[0].raw,q);assert.equal(batch.state.report.pass2,'pending');
+  for(const finding of batch.state.items[0].unresolved){const r=await call('adminSmartReview',{batchId:batch.id,expectedRevision:batch.revision,key:'s1q1',decision:'resolve',findingId:finding.id,reason:'Verified individual evidence against the controlled fixture.'});assert.equal(r.status,200);batch=r.data;}
   batch=(await call('adminSmartReview',{batchId:batch.id,expectedRevision:batch.revision,key:'s1q1',decision:'approve',important:true,reason:'Reviewed all alternatives, answer, explanation and source against fixture.'})).data;
   const f=await call('adminSmartFilter',{batchId:batch.id,expectedRevision:batch.revision,filter:{criterion:'important',requested:100}});assert.equal(f.status,200);batch=f.data;assert.equal(batch.state.report.shortfall,99);assert.equal(batch.state.report.selected,1);assert.equal(batch.state.report.pass2,'approved');
   assert.doesNotMatch(JSON.stringify(await rpc(null,'catalog')),/source\.html|base64|correctOptionId|smartBatchId/);
@@ -56,6 +57,18 @@ test('smart staging database lifecycle and authorization are fail-closed',async 
   const imp=(await db.query('select * from public.imports')).rows[0];await rpc(admin,'adminVerifyContent',{importId:imp.id,decision:'approve',reason:'Final synthetic selected draft reviewed after installation.'});await save('tests',{...draft,published:true});await save('admin_settings',{telegram_required:false});
   const start=await rpc(student,'start',{testId:'draft',idempotencyKey:crypto.randomUUID()});assert.equal(start.status,'started');const question=start.page.questions[0];assert.doesNotMatch(JSON.stringify(start),/correctOptionId|explanation|smartBatchId|sourceRecord|source\.html|base64|cite:|🟢/);assert.deepEqual(question.options.map(o=>Object.keys(o).sort()),Array(4).fill(['id','text']));
   const end=await rpc(student,'submitAttempt',{attemptId:start.page.attemptId,answers:{[question.id]:'option-0'}});assert.equal(end.score,1);
+ });
+ await t.test('unrelated edits cannot waive source blockers through the HTTP/DB review and install paths',async()=>{
+  await save('tests',{...draft,id:'source-conflict',published:false});
+  const records=[q,{...q,question_statement:'Another valid synthetic question sharing the same original ID?'}];
+  const input={testId:'source-conflict',files:[{name:'duplicate.html',expectedCount:2,base64:Buffer.from('<script>const questions='+JSON.stringify(records)+';</script>').toString('base64')}]};
+  let r=await call('adminSmartUpload',input);assert.equal(r.status,200);let b=r.data;
+  const review=async extra=>call('adminSmartReview',{batchId:b.id,expectedRevision:b.revision,key:'s1q2',reason:'Only synthetic source evidence is used in this isolated regression.',...extra});
+  r=await review({decision:'edit',question:{...b.state.items[1].working,correctIndex:0,explanation:'A changed explanation does not correct the duplicate source identity.'}});assert.equal(r.status,200);b=r.data;
+  assert.ok(b.state.items[1].unresolved.some(f=>f.code==='source_id'));assert.equal((await review({decision:'resolve',findingId:'source_id'})).status,400);
+  assert.equal((await review({decision:'approve'})).status,400);assert.equal((await call('adminSmartFinalize',{batchId:b.id,expectedRevision:b.revision})).status,400);
+  assert.equal((await db.query("select count(*)::int n from public.questions where test_id='source-conflict'")).rows[0].n,0);
+  assert.deepEqual((await db.query('select original_items from public.smart_import_batches where id=$1',[b.id])).rows[0].original_items.map(i=>i.raw),records);
  });
  }finally{await db.close();}
 });

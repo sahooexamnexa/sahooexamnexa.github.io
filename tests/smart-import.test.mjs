@@ -1,13 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {textPdf} from './smart-pdf-fixture.mjs';
 import {stageSources,reviewItem,filterBatch,parsePdfText,extractPdf,cleanText} from '../scripts/smart-import.mjs';
 export const record=(id=1)=>({id,chapter:'Computer',question_statement:'Which synthetic value is shown for record '+id+'?',options:['Alpha','Beta','Gamma','Delta'],correct:0,explanation:'Alpha is explicitly the answer in this synthetic fixture.',tags:[]});
 export const source=(records,name='fixture.html',expectedCount=records.length)=>({name,expectedCount,base64:Buffer.from('<script>const questions='+JSON.stringify(records)+';function UI(){return questions;}</script>').toString('base64')});
-export function textPdf(lines){
- const stream='BT /F1 12 Tf 40 780 Td '+lines.map((line,i)=>(i?'0 -18 Td ':'')+'('+line.replace(/[\\()]/g,'\\$&')+') Tj').join('\n')+' ET';
- const objs=['<< /Type /Catalog /Pages 2 0 R >>','<< /Type /Pages /Kids [3 0 R] /Count 1 >>','<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 842] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>','<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>','<< /Length '+Buffer.byteLength(stream)+' >>\nstream\n'+stream+'\nendstream'];
- let pdf='%PDF-1.4\n',offsets=[0];for(const [i,o]of objs.entries()){offsets.push(Buffer.byteLength(pdf));pdf+=(i+1)+' 0 obj\n'+o+'\nendobj\n';}const xref=Buffer.byteLength(pdf);pdf+='xref\n0 6\n0000000000 65535 f \n'+offsets.slice(1).map(o=>String(o).padStart(10,'0')+' 00000 n \n').join('')+'trailer << /Size 6 /Root 1 0 R >>\nstartxref\n'+xref+'\n%%EOF';return Buffer.from(pdf);
-}
+const evidence='Verified this individual finding against the controlled synthetic source.';
+function resolveContent(b,key){for(const f of b.items.find(i=>i.key===key).unresolved){if(f.stage==='content')b=reviewItem(b,{key,decision:'resolve',findingId:f.id,reason:evidence});}return b;}
 const lines=['1. Which synthetic option is first?','A. Alpha','B. Beta','C. Gamma','D. Delta','Answer: A','Explanation: Alpha is the first listed synthetic option.','PYP: Odisha Police SI 2023'];
 test('100Q static HTML is exact and originals/options/Unicode remain accounted for',async()=>{
  const records=Array.from({length:100},(_,i)=>record(i+1));records[0].question_statement+=' ଓଡ଼ିଆ';const f=source(records),b=await stageSources([f]);
@@ -46,7 +44,7 @@ test('requested 100 with only 86 reviewed important questions reports shortfall 
 });
 test('manual correction reopens content review and keeps raw source immutable',async()=>{
  let b=await stageSources([source([record()])]);const original=structuredClone(b.items[0].raw);
- b=reviewItem(b,{key:'s1q1',decision:'approve',reason:'Verified against the authoritative synthetic specification.'});assert.equal(b.report.pass2,'approved');
+ b=resolveContent(b,'s1q1');b=reviewItem(b,{key:'s1q1',decision:'approve',reason:'Verified against the authoritative synthetic specification.'});assert.equal(b.report.pass2,'approved');
  b=reviewItem(b,{key:'s1q1',decision:'edit',reason:'Corrected explanation from the original specification.',question:{...b.items[0].working,correctIndex:0,explanation:'Updated explanation from a reviewed synthetic source.'}});assert.equal(b.report.pass2,'pending');assert.deepEqual(b.items[0].raw,original);
  b=reviewItem(b,{key:'s1q1',decision:'remove',reason:'Owner explicitly excludes this occurrence from working selection.'});assert.equal(b.report.selected,0);assert.equal(b.items.length,1);assert.equal(b.report.removed,1);
 });
@@ -89,9 +87,63 @@ test('all four filters retain source order, report exclusions and never impose a
 test('new same-fact relationships reopen related approvals and source-wide findings remain visible',async()=>{
  let b=await stageSources([source([{...record(1),question_statement:'Which device stores permanent firmware?'},{...record(2),question_statement:'How many binary digits form a byte?'},{...record(3),correct:null}])]);
  const evidence='All synthetic alternatives and explanations checked against fixture.';
- b=reviewItem(b,{key:'s1q1',decision:'approve',reason:evidence,factKey:'same'});
+ b=resolveContent(b,'s1q1');b=reviewItem(b,{key:'s1q1',decision:'approve',reason:evidence,factKey:'same'});
  b=reviewItem(b,{key:'s1q2',decision:'keep',reason:evidence,factKey:'same'});
  assert.equal(b.items[0].review.decision,'pending');
  b=reviewItem(b,{key:'s1q3',decision:'reject',reason:'This broken occurrence is explicitly excluded, never silently lost.'});
  assert.equal(b.report.pass1,'blocked');assert.equal(b.report.selectedPass1,'passed');assert.equal(b.report.parsed,3);assert.equal(b.report.rejected,1);
+});
+
+test('duplicate source IDs survive unrelated explanation edits and cannot be waived',async()=>{
+ let b=await stageSources([source([record(1),{...record(1),question_statement:'A different synthetic question with the same source ID?'}])]);const raw=structuredClone(b.items.map(i=>i.raw));
+ assert.ok(b.items[1].unresolved.some(f=>f.code==='source_id'));
+ b=reviewItem(b,{key:'s1q2',decision:'edit',reason:evidence,question:{...b.items[1].working,correctIndex:0,explanation:'Only the explanation changed; source ID is still duplicated.'}});
+ b=resolveContent(b,'s1q2');assert.ok(b.items[1].unresolved.some(f=>f.code==='source_id'));assert.equal(b.report.pass1,'blocked');
+ assert.throws(()=>reviewItem(b,{key:'s1q2',decision:'approve',reason:evidence}));assert.throws(()=>reviewItem(b,{key:'s1q2',decision:'resolve',findingId:'source_id',reason:evidence}));assert.deepEqual(b.items.map(i=>i.raw),raw);
+});
+
+test('targeted option repair clears only that structural finding; corrupt evidence reopens it',async()=>{
+ let b=await stageSources([source([{...record(),options:['Alpha�...','Beta','Gamma','Delta'],tags:['Odisha Police SI 2023']}])]);const raw=structuredClone(b.items[0].raw);
+ b=reviewItem(b,{key:'s1q1',decision:'resolve',findingId:'pyp_provenance',reason:evidence});
+ b=reviewItem(b,{key:'s1q1',decision:'edit',reason:evidence,question:{...b.items[0].working,options:['Alpha','Beta','Gamma','Delta'].map(text=>({text})),correctIndex:0}});
+ assert.equal(b.report.pass1,'passed');assert.ok(!b.items[0].unresolved.some(f=>f.code==='pyp_provenance'));assert.ok(b.items[0].unresolved.some(f=>f.code==='factual_review'));
+ b=resolveContent(b,'s1q1');b=reviewItem(b,{key:'s1q1',decision:'approve',reason:evidence});assert.equal(b.report.pass2,'approved');
+ b=reviewItem(b,{key:'s1q1',decision:'edit',reason:evidence,question:{...b.items[0].working,options:[{text:'Alpha�...'},...b.items[0].working.options.slice(1)],correctIndex:0}});assert.equal(b.report.pass1,'blocked');assert.equal(b.report.pass2,'pending');assert.deepEqual(b.items[0].raw,raw);
+});
+
+test('identical PDF explanations consolidate safely with every original occurrence and line retained',async()=>{
+ const repeated=lines.concat('Explanation: Alpha is the first listed synthetic option.');
+ const b=await stageSources([{name:'same.pdf',expectedCount:1,base64:textPdf(repeated).toString('base64')}]);
+ assert.equal(b.items[0].raw.explanationOccurrences.length,2);assert.deepEqual(b.items[0].raw.explanationOccurrences.map(o=>o.line),[7,9]);assert.equal(b.items[0].working.explanation,lines[6].slice(13));assert.equal(b.report.pass1,'passed');assert.ok(!b.items[0].findings.some(f=>f.code==='explanation_conflict'));
+});
+
+test('conflicting PDF explanations need correction AND explicit individual resolution; originals immutable',async()=>{
+ let b=await stageSources([{name:'conflict.pdf',expectedCount:1,base64:textPdf(lines.concat('Explanation: A second contradictory candidate from this source.')).toString('base64')}]);const raw=structuredClone(b.items[0].raw);
+ assert.equal(b.items[0].working.explanation,'');assert.equal(raw.explanationOccurrences.length,2);assert.ok(b.items[0].unresolved.some(f=>f.code==='explanation_conflict'));assert.throws(()=>reviewItem(b,{key:'s1q1',decision:'approve',reason:evidence}));
+ b=reviewItem(b,{key:'s1q1',decision:'edit',reason:evidence,question:{...b.items[0].working,correctIndex:0,explanation:raw.explanationOccurrences[0].text}});assert.ok(b.items[0].unresolved.some(f=>f.code==='explanation_conflict'));
+ b=resolveContent(b,'s1q1');assert.throws(()=>reviewItem(b,{key:'s1q1',decision:'approve',reason:evidence}));
+ b=reviewItem(b,{key:'s1q1',decision:'resolve',findingId:'explanation_conflict',reason:evidence});b=reviewItem(b,{key:'s1q1',decision:'approve',reason:evidence});assert.equal(b.report.pass1,'passed');assert.equal(b.report.pass2,'approved');assert.deepEqual(b.items[0].raw,raw);
+ b=reviewItem(b,{key:'s1q1',decision:'edit',reason:evidence,question:{...b.items[0].working,correctIndex:0,explanation:raw.explanationOccurrences[1].text}});assert.ok(b.items[0].unresolved.some(f=>f.code==='explanation_conflict'));assert.equal(b.report.pass2,'pending');
+});
+
+for(const [name,text]of [['replacement','Alpha�'],['truncated','Alpha...'],['ellipsis','Alpha…'],['decoding','cafÃ©'],['control','Alpha\u0000'],['cleaned-empty','🟢 [cite: 1]'],['whitespace','   ']])test('corrupted option '+name+' fails Pass 1 without invented repair',async()=>{
+ for(let index=0;index<4;index++){const q=record();q.options[index]=text;const b=await stageSources([source([q])]);assert.equal(b.report.pass1,'blocked');assert.ok(b.items[0].unresolved.some(f=>f.code==='option_text_'+index));assert.throws(()=>reviewItem(b,{key:'s1q1',decision:'approve',reason:evidence}));assert.deepEqual(b.items[0].raw,q);}
+});
+
+test('corruption in question, explanation and canonical answer IDs is structural; legitimate Unicode is valid',async()=>{
+ for(const patch of [{question_statement:'A corrupted � question?'},{explanation:'Corrupted explanation �'},{explanation:'Incomplete explanation…'}]){const b=await stageSources([source([{...record(),...patch}])]);assert.equal(b.report.pass1,'blocked');}
+ const canonical={id:'q1',text:'Which legitimate Unicode value applies?',options:['ଓଡ଼ିଆ','English café','日本語','1, 2, 3'].map((text,i)=>({id:'o'+i,text})),correctOptionId:'o0�',explanation:'A legitimate explanation in English and ଓଡ଼ିଆ.',tags:[],topic:'ଓଡ଼ିଆ'};
+ const f=q=>({name:'unicode.html',expectedCount:1,base64:Buffer.from('<script type="application/json" id="sahoo-mock-data">'+JSON.stringify({questionCount:1,questions:[q]})+'</script>').toString('base64')});
+ assert.equal((await stageSources([f(canonical)])).report.pass1,'blocked');const valid=await stageSources([f({...canonical,correctOptionId:'o0'})]);assert.equal(valid.report.pass1,'passed');assert.deepEqual(valid.items[0].working.options,canonical.options);
+});
+
+test('same-fact links survive unrelated edits; invalidated resolutions never revive on reverting text',async()=>{
+ let b=await stageSources([source([{...record(1),question_statement:'Which device stores permanent firmware?'},{...record(2),question_statement:'Where are the startup instructions stored?'}])]);
+ for(const key of ['s1q1','s1q2'])b=reviewItem(b,{key,decision:'keep',factKey:'reviewed-firmware-fact',reason:evidence});
+ for(const key of ['s1q1','s1q2']){b=resolveContent(b,key);b=reviewItem(b,{key,decision:'approve',reason:evidence});}assert.equal(b.report.pass2,'approved');
+ const old=b.items[0].working.explanation;
+ b=reviewItem(b,{key:'s1q1',decision:'edit',reason:evidence,question:{...b.items[0].working,correctIndex:0,explanation:'Changed synthetic explanation requiring relationship review again.'}});
+ assert.equal(b.report.sameFactCandidates,1);assert.equal(b.items[1].review.decision,'pending');assert.ok(b.items[1].unresolved.some(f=>f.code==='same_fact_candidate'));
+ b=reviewItem(b,{key:'s1q1',decision:'edit',reason:evidence,question:{...b.items[0].working,correctIndex:0,explanation:old}});
+ assert.ok(b.items[1].unresolved.some(f=>f.code==='same_fact_candidate'));assert.equal(b.report.pass2,'pending');
 });

@@ -7,15 +7,19 @@ const hash=x=>createHash('sha256').update(x).digest('hex');
 export const cleanText=value=>typeof value==='string'?value.replaceAll('🟢','').replace(/\[cite:\s*\d+\]/gi,'').replace(/\[(?:MCQ PDF|PDF|Book|Notes|Book Notes|PDF Notes|Custom|Source|Practice)\]/gi,'').replace(/^\s*(?:Source file|Filename)\s*:[^\n]*$/gim,'').trim():'';
 const norm=s=>cleanText(s).normalize('NFKC').toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu,' ').trim();
 const issue=(code,reason,stage='structure',related=null)=>({code,reason,stage,severity:'blocking',suggestion:stage==='content'?'Verify against an authoritative reference; record evidence or reject this occurrence.':'Correct from the original source; never guess missing content.',related});
+const damaged=s=>typeof s==='string'&&/[\uFFFD\u0000-\u0008\u000B\u000C\u000E-\u001F]|(?:\.{3}|…)\s*$|(?:Ã[\u0080-\u00BF]|Â[\u0080-\u00BF]|â€|ðŸ|à¬|à\u00AD)/u.test(s);
 
 export function auditItem(q){
  const findings=[];
- if(!q.text||q.text.length<8||/\uFFFD|(?:\.{3}|…)\s*$/.test(q.text))findings.push(issue('question_text','Missing, short, replacement characters or possibly truncated question.'));
+ if(!q.text||q.text.length<8||damaged(q.text))findings.push(issue('question_text','Missing, short, decoding corruption or possibly truncated question.'));
  const opts=Array.isArray(q.options)?q.options:[];
  if(opts.length!==4||opts.some(o=>!o.text||!o.id))findings.push(issue('options','Exactly four usable options with stable IDs are required.'));
+ opts.forEach((o,i)=>{if(!cleanText(o.text)||damaged(o.text)||damaged(o.id))findings.push(issue('option_text_'+i,'Option '+(i+1)+' is empty after cleaning, corrupted or visibly truncated. Correct from source evidence.'));});
  if(new Set(opts.map(o=>o.id)).size!==opts.length)findings.push(issue('option_ids','Duplicate option IDs.'));
  if(new Set(opts.map(o=>norm(o.text))).size!==opts.length)findings.push(issue('duplicate_options','Repeated option text can make multiple choices correct.'));
- if(!q.correctOptionId||opts.filter(o=>o.id===q.correctOptionId).length!==1)findings.push(issue('answer_mapping','Exactly one answer must reference an existing option.'));
+ if(!q.correctOptionId||damaged(q.correctOptionId)||opts.filter(o=>o.id===q.correctOptionId).length!==1)findings.push(issue('answer_mapping','Exactly one intact answer ID must reference an existing option.'));
+ if(!cleanText(q.explanation)||damaged(q.explanation))findings.push(issue('explanation_text','Explanation is missing, corrupted or visibly truncated. Correct from source evidence.'));
+ if(damaged(q.topic)||q.tags.some(damaged))findings.push(issue('label_text','Topic or PYP label contains damaged text.'));
  if(!q.explanation||q.explanation.length<20)findings.push(issue('explanation_quality','Explanation is missing or too brief to support the answer.','content'));
  // These are unresolved checks, not assertions that an answer is wrong or AI-verified.
  findings.push(issue('factual_review','Factual correctness and question/answer consistency require evidence.','content'));
@@ -41,20 +45,25 @@ export function parsePdfText(text){
  if(!starts.length)throw Error('No supported numbered MCQ blocks. Scanned/layout-ambiguous PDF needs manual transcription or a supported export.');
  if(text.slice(0,starts[0].index).trim())throw Error('Unaccounted PDF preamble; use an MCQ-only export so no source text is silently skipped.');
  return starts.map((m,i)=>{
-  const block=text.slice(m.index,starts[i+1]?.index??text.length),lines=block.split(/\r?\n/),q={id:m[1],number:Number(m[1]),text:m[2],options:[],correctOptionId:null,explanation:'',tags:[],topic:'',sourceBlock:block};let section='text';
-  for(const line of lines.slice(1)){
+  const block=text.slice(m.index,starts[i+1]?.index??text.length),lines=block.split(/\r?\n/),q={id:m[1],number:Number(m[1]),text:m[2],options:[],correctOptionId:null,explanation:'',explanationOccurrences:[],tags:[],topic:'',sourceBlock:block};let section='text';
+  for(const [lineIndex,line] of lines.entries()){
+   if(lineIndex===0)continue;
    if(!line.trim())continue;
    let x=/^\s*([A-D])[).:]\s*(.*)$/.exec(line);
    if(x){q.options.push({id:'option-'+x[1],text:x[2]});section='option';continue;}
    x=/^\s*(?:Correct\s+Answer|Answer)\s*:\s*([A-D])\s*$/i.exec(line);
    if(x){if(q.correctOptionId)q.multipleAnswers=true;q.correctOptionId='option-'+x[1].toUpperCase();section='answer';continue;}
-   x=/^\s*Explanation\s*:\s*(.*)$/i.exec(line);if(x){q.explanation=x[1];section='explanation';continue;}
+   x=/^\s*Explanation\s*:\s*(.*)$/i.exec(line);if(x){q.explanationOccurrences.push({line:lineIndex+1,text:x[1]});section='explanation';continue;}
    x=/^\s*PYP\s*:\s*(.*)$/i.exec(line);if(x){q.tags.push(x[1]);section='tag';continue;}
    if(section==='option')q.options.at(-1).text+='\n'+line;
-   else if(section==='text'||section==='explanation')q[section]+='\n'+line;
+   else if(section==='explanation')q.explanationOccurrences.at(-1).text+='\n'+line;
+   else if(section==='text')q.text+='\n'+line;
    else q.unparsed=(q.unparsed||'')+'\n'+line;
   }
   if(q.multipleAnswers)q.correctOptionId=null;
+  const explanations=[...new Set(q.explanationOccurrences.map(o=>o.text.trim()))];
+  q.explanation=explanations.length===1?explanations[0]:'';
+  q.explanationConflict=explanations.length>1;
   return q;
  });
 }
@@ -95,13 +104,27 @@ export function duplicateFindings(items){
  }
  return relations;
 }
+function findingEvidence(item,f,items){
+ const q=item.working,answer=[q.text,q.options,q.correctOptionId];let evidence;
+ if(f.related){const other=items.find(i=>i.key===f.related);evidence=[q,other?.working,item.review?.factKey||'',other?.review?.factKey||''];}
+ else if(f.code==='factual_review'||f.code==='ambiguity_review')evidence=answer;
+ else if(f.code==='pyp_provenance')evidence=[q.tags,item.raw?.tags,item.raw?.pyp];
+ else if(f.code==='relevance_review')evidence=[q.text,q.topic];
+ else if(f.code==='explanation_conflict')evidence=[q.explanation,item.raw?.explanationOccurrences];
+ else if(f.code==='multiple_answers')evidence=[q.correctOptionId,q.options,item.raw?.sourceBlock];
+ else if(f.code.startsWith('explanation_'))evidence=[...answer,q.explanation];
+ else evidence=[q,item.sourceId,item.sourceFindings,item.raw?.unparsed];
+ return hash(Buffer.from(JSON.stringify([f.code,evidence])));
+}
 export function refreshAudit(batch){
  const b=clone(batch),relations=duplicateFindings(b.items);
  for(const item of b.items){
   item.findings=[...auditItem(item.working),...(item.sourceFindings||[])];
   for(const r of relations.filter(r=>r.item===item.key||r.related===item.key))item.findings.push(issue(r.kind,'Duplicate candidate, not automatically removed. Compare both source occurrences.','content',r.item===item.key?r.related:r.item));
-  const accepted=item.review?.decision==='approve';
-  item.unresolved=item.findings.filter(f=>f.stage==='structure'||!accepted);
+  for(const f of item.findings){f.id=f.code+(f.related?':'+f.related:'');f.evidence=findingEvidence(item,f,b.items);}
+  item.resolutions=Object.fromEntries(Object.entries(item.resolutions||{}).filter(([id,r])=>item.findings.some(f=>f.id===id&&f.evidence===r.evidence)));
+  item.unresolved=item.findings.filter(f=>item.resolutions?.[f.id]?.evidence!==f.evidence);
+  if(item.review?.decision==='approve'&&item.unresolved.length)item.review.decision='pending';
  }
  const active=b.items.filter(i=>!['reject','remove'].includes(i.review?.decision));
  const criterion=b.filter?.criterion||'all';
@@ -113,8 +136,8 @@ export function refreshAudit(batch){
  removed:b.items.filter(i=>i.review?.decision==='remove').length,filteredOut:active.length-selected.length,added:0,corrected:b.items.filter(i=>i.edited).length,
  exactDuplicates:relations.filter(r=>r.kind==='exact_duplicate').length,nearDuplicates:relations.filter(r=>r.kind==='near_duplicate').length,sameFactCandidates:relations.filter(r=>r.kind==='same_fact_candidate').length,
  duplicateRelationships:relations,flagged:b.items.filter(i=>i.unresolved.length).length,pypTagged:selected.filter(i=>i.working.tags.length).length,criteria:criterion,requested:b.filter?.requested??null,
- shortfall:Math.max(0,(b.filter?.requested||0)-selected.length),pass1:b.sources.every(s=>!s.errors.length)&&b.items.every(i=>!i.findings.some(f=>f.stage==='structure'))?'passed':'blocked',
- selectedPass1:b.sources.every(s=>!s.errors.length)&&selected.length>0&&selected.every(i=>!i.findings.some(f=>f.stage==='structure'))?'passed':'blocked',
+ shortfall:Math.max(0,(b.filter?.requested||0)-selected.length),pass1:b.sources.every(s=>!s.errors.length)&&b.items.every(i=>!i.unresolved.some(f=>f.stage==='structure'))?'passed':'blocked',
+ selectedPass1:b.sources.every(s=>!s.errors.length)&&selected.length>0&&selected.every(i=>!i.unresolved.some(f=>f.stage==='structure'))?'passed':'blocked',
  pass2:!blocking&&selected.length?'approved':'pending',unresolvedBlocking:selected.reduce((n,i)=>n+i.unresolved.length,0)+b.sources.reduce((n,s)=>n+s.errors.length,0)};
  return b;
 }
@@ -140,32 +163,32 @@ export async function stageSources(files,{pdfExtractor=extractPdf}={}){
    if(sourceId===undefined||ids.has(String(sourceId)))sourceFindings.push(issue('source_id','Missing or duplicate source ID in this file.'));ids.add(String(sourceId));
    if(raw?.unparsed)sourceFindings.push(issue('unparsed_text','Unaccounted text after answer/source label; inspect the preserved block.'));
    if(raw?.multipleAnswers)sourceFindings.push(issue('multiple_answers','Multiple answer declarations in source.'));
+   if(raw?.explanationConflict)sourceFindings.push(issue('explanation_conflict','Conflicting explanation declarations. Inspect every private candidate and explicitly resolve the working explanation.'));
    items.push({key,sourceIndex:index,sourceId:sourceId??null,sourcePosition:i+1,raw:clone(raw),working:q,sourceFindings,review:{decision:'pending',important:false},edited:false});
   });
  }
  return refreshAudit({sources,items,sourceSha256:hash(Buffer.from(JSON.stringify(sources))),filter:{criterion:'all',requested:null}});
 }
 export function reviewItem(batch,payload){
- const b=clone(batch),item=b.items.find(i=>i.key===payload.key);if(!item)throw Error('Question occurrence not found.');
- const oldRelations=duplicateFindings(b.items);
- if(!['approve','keep','reject','remove','edit'].includes(payload.decision)||typeof payload.reason!=='string'||payload.reason.trim().length<20)throw Error('Decision and meaningful evidence/reason required.');
+ const b=refreshAudit(batch),item=b.items.find(i=>i.key===payload.key);if(!item)throw Error('Question occurrence not found.');
+ if(!['approve','keep','reject','remove','edit','resolve'].includes(payload.decision)||typeof payload.reason!=='string'||payload.reason.trim().length<20)throw Error('Decision and meaningful evidence/reason required.');
  if(payload.decision==='edit'){
   const q=payload.question;if(!q||!Array.isArray(q.options))throw Error('Editable question required.');
   item.working={...item.working,text:cleanText(q.text),options:q.options.map((o,i)=>({id:item.working.options[i]?.id||'option-'+i,text:cleanText(o.text)})),explanation:cleanText(q.explanation),tags:sourcePypTags(q),topic:cleanText(q.topic)};
   item.working.correctOptionId=Number.isInteger(q.correctIndex)?item.working.options[q.correctIndex]?.id??null:null;
-  item.edited=true;item.review={decision:'pending',important:false,reason:payload.reason};
-  // Evidence may repair a malformed occurrence, but original record/ID remain in archive.
-  item.sourceFindings=[];
+  item.edited=true;item.review={...item.review,decision:'pending',reason:payload.reason};
+  // Source findings survive edits. Evidence-scoped resolutions remain independently
+  // valid only while their particular inputs remain unchanged.
+ }else if(payload.decision==='resolve'){
+  const finding=item.findings.find(f=>f.id===payload.findingId);
+  if(!finding)throw Error('Select one current finding to resolve.');
+  if(finding.stage==='structure'&&!['explanation_conflict','multiple_answers','unparsed_text'].includes(finding.code))throw Error('Correct the underlying evidence first. Immutable source-ID conflicts require excluding the conflicting occurrence or a corrected source.');
+  if(['explanation_conflict','multiple_answers','unparsed_text'].includes(finding.code)&&auditItem(item.working).some(f=>f.stage==='structure'))throw Error('Correct the working fields from the source before resolving this source finding.');
+  item.resolutions={...item.resolutions,[finding.id]:{evidence:finding.evidence,reason:payload.reason.trim()}};
+  item.review={...item.review,decision:'pending'};
  }else{
-  if(payload.decision==='approve'&&auditItem(item.working).some(f=>f.stage==='structure'))throw Error('Resolve structural blockers before approval.');
-  item.review={decision:payload.decision,reason:payload.reason,important:payload.important===true,factKey:typeof payload.factKey==='string'?payload.factKey.trim().slice(0,200):''};
- }
- // Every correction reopens content review of all retained occurrences: duplicate relationships may change.
- if(payload.decision==='edit')for(const other of b.items)if(other.review.decision==='approve')other.review.decision='pending';
- // A newly linked fact must be reviewed by both occurrences; an earlier approval
- // cannot silently cover a relationship that did not exist when it was recorded.
- for(const r of duplicateFindings(b.items))if(!oldRelations.some(old=>old.item===r.item&&old.related===r.related&&old.kind===r.kind)){
-  for(const other of b.items)if(other.key!==payload.key&&[r.item,r.related].includes(other.key)&&other.review.decision==='approve')other.review.decision='pending';
+  if(payload.decision==='approve'&&item.unresolved.length)throw Error('Resolve every current finding individually before approval.');
+  item.review={decision:payload.decision,reason:payload.reason,important:payload.important===true,factKey:typeof payload.factKey==='string'?payload.factKey.trim().slice(0,200):item.review.factKey||''};
  }
  return refreshAudit(b);
 }
