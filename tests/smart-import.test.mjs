@@ -1,12 +1,86 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import {createHash} from 'node:crypto';
 import {textPdf} from './smart-pdf-fixture.mjs';
-import {stageSources,reviewItem,filterBatch,parsePdfText,extractPdf,cleanText} from '../scripts/smart-import.mjs';
+import {stageSources,reviewItem,filterBatch,parsePdfText,extractPdf,cleanText,pdfPageText} from '../scripts/smart-import.mjs';
 export const record=(id=1)=>({id,chapter:'Computer',question_statement:'Which synthetic value is shown for record '+id+'?',options:['Alpha','Beta','Gamma','Delta'],correct:0,explanation:'Alpha is explicitly the answer in this synthetic fixture.',tags:[]});
 export const source=(records,name='fixture.html',expectedCount=records.length)=>({name,expectedCount,base64:Buffer.from('<script>const questions='+JSON.stringify(records)+';function UI(){return questions;}</script>').toString('base64')});
 const evidence='Verified this individual finding against the controlled synthetic source.';
 function resolveContent(b,key){for(const f of b.items.find(i=>i.key===key).unresolved){if(f.stage==='content')b=reviewItem(b,{key,decision:'resolve',findingId:f.id,reason:evidence});}return b;}
 const lines=['1. Which synthetic option is first?','A. Alpha','B. Beta','C. Gamma','D. Delta','Answer: A','Explanation: Alpha is the first listed synthetic option.','PYP: Odisha Police SI 2023'];
+const pdfItem=(str,x=0,y=700,extra={})=>({str,transform:[12,0,0,12,x,y],width:12,height:12,fontName:'fixture',dir:'ltr',hasEOL:false,...extra});
+const pdfFixture=name=>readFileSync(new URL('./fixtures/odia-pdf/'+name,import.meta.url));
+const odiaExpected=JSON.parse(pdfFixture('expected.json'));
+const odiaHashes=JSON.parse(pdfFixture('sha256.json'));
+const pdfField=s=>s.normalize('NFC').replace(/[\r\n\t ]+/g,' ').trim();
+
+test('PDF joining preserves contiguous Odia shaping fragments without inventing spaces',()=>{
+ assert.equal(pdfPageText({items:[pdfItem('ଓ',0),pdfItem('ଡ଼ି',12),pdfItem('ଆ',24)]}),'ଓଡ଼ିଆ');
+ assert.equal(pdfPageText({items:[pdfItem('ଭା',0),pdfItem('ଷା',12)]}),'ଭାଷା');
+});
+test('PDF joining keeps genuine explicit word spaces and font-run boundaries',()=>{
+ const items=[pdfItem('English',0),pdfItem(' ',12),pdfItem('ଓ',24,700,{height:12}),pdfItem('ଡ଼ି',36,700,{fontName:'other'}),pdfItem('ଆ',48),pdfItem(' words',60)];
+ assert.equal(pdfPageText({items}),'English ଓଡ଼ିଆ words');
+});
+test('PDF joining retains combining marks, joiners and standalone instructional signs exactly',()=>{
+ for(const text of ['କିକା','କ୍ଷ','କ୍\u200dଷ','କ୍\u200cଷ','ି ା ୁ େ ୈ ୋ ୌ','୦୧୨୩୪୫୬୭୮୯']){
+  const items=[...text].map((str,i)=>pdfItem(str,i*2,700,{width:2}));
+  assert.equal(pdfPageText({items}),text);
+ }
+});
+test('PDF joining preserves explicit and empty EOL markers and wrapped line order',()=>{
+ assert.equal(pdfPageText({items:[pdfItem('First',0),pdfItem('',12,700,{hasEOL:true}),pdfItem('Second',0,680,{hasEOL:true}),pdfItem('Third',0,660)]}),'First\nSecond\nThird');
+ assert.equal(pdfPageText({items:[pdfItem('Line one',0),pdfItem('Line two',0,680)]}),'Line one\nLine two');
+});
+test('PDF joining does not turn bounded letter spacing into word separators',()=>{
+ assert.equal(pdfPageText({items:[pdfItem('A',0,700,{width:6}),pdfItem('B',7,700,{width:6}),pdfItem('C',14,700,{width:6})]}),'ABC');
+});
+test('PDF ambiguous geometric gaps are blocked instead of guessing word boundaries',()=>{
+ assert.throws(()=>pdfPageText({items:[pdfItem('some',0),pdfItem('words',40)]}),/word boundary is ambiguous/);
+});
+test('PDF unsupported direction, rotation, reading order and invalid geometry fail closed',()=>{
+ for(const patch of [{dir:'rtl'},{transform:[0,12,-12,0,0,700]},{transform:[12,0,0,12,NaN,700]},{width:Infinity}])assert.throws(()=>pdfPageText({items:[pdfItem('text',0,700,patch)]}),/ambiguous text geometry/);
+ assert.throws(()=>pdfPageText({items:[pdfItem('right',50),pdfItem('left',0)]}),/reading order moves backwards/);
+ assert.throws(()=>pdfPageText({items:[pdfItem('right ',50),pdfItem('left',0)]}),/reading order moves backwards/);
+ assert.throws(()=>pdfPageText({items:[pdfItem('right',50),pdfItem(' left',0)]}),/reading order moves backwards/);
+ assert.throws(()=>pdfPageText({items:[pdfItem('vertical')],styles:{fixture:{vertical:true}}}),/ambiguous text geometry/);
+});
+for(const [name,character]of [['NUL','\u0000'],['replacement','\uFFFD'],['private BMP','\uE001'],['private supplementary','\u{F0001}'],['surrogate','\uD800'],['noncharacter','\uFFFF']])test('PDF '+name+' mapping is rejected without replacing or dropping glyphs',()=>{
+ assert.throws(()=>pdfPageText({items:[pdfItem('Text '+character)]},2),/Unsupported PDF text on page 2: unmapped\/corrupt Unicode/);
+});
+test('PDF visual-order Odia vowel before a base is blocked without reordering it',()=>{
+ assert.throws(()=>pdfPageText({items:[pdfItem('େକ')]}),/ambiguous Odia mark\/base order/);
+ assert.throws(()=>pdfPageText({items:[pdfItem('Word ',0),pdfItem('େ',12),pdfItem('କ',24)]}),/ambiguous Odia mark\/base order/);
+ assert.equal(pdfPageText({items:[pdfItem('କ',0),pdfItem('ିକ',12)]}),'କିକ');
+});
+
+for(const [name,key]of [['valid.pdf','basic'],['wrapped.pdf','wrapped']])test('embedded-font Odia '+name+' preserves every question, option, answer and explanation',async()=>{
+ const bytes=pdfFixture(name),expected=odiaExpected[key],b=await stageSources([{name,expectedCount:expected.length,base64:bytes.toString('base64')}]);
+ assert.equal(createHash('sha256').update(bytes).digest('hex'),odiaHashes[name]);
+ assert.ok(bytes.includes(Buffer.from('/FontFile2')));assert.ok(bytes.includes(Buffer.from('/ToUnicode')));
+ assert.equal(b.report.pass1,'passed');assert.equal(b.report.pass2,'pending');assert.equal(b.report.parsed,expected.length);
+ assert.deepEqual(b.items.map(i=>i.sourcePosition),expected.map((_,i)=>i+1));assert.deepEqual(b.items.map(i=>i.sourceId),expected.map(q=>q.id));
+ for(const [i,q]of expected.entries()){
+  const got=b.items[i].working;assert.equal(pdfField(got.text),pdfField(q.text));assert.equal(got.options.length,4);
+  assert.deepEqual(got.options.map(o=>o.id),['option-A','option-B','option-C','option-D']);
+  assert.deepEqual(got.options.map(o=>pdfField(o.text)),q.options.map(pdfField));
+  assert.equal(got.correctOptionId,'option-'+q.answer);assert.equal(pdfField(got.explanation),pdfField(q.explanation));assert.deepEqual(got.tags,[]);
+ }
+ assert.equal(b.sources[0].base64,bytes.toString('base64'));assert.equal(b.sources[0].sha256,odiaHashes[name]);
+});
+for(const name of ['nul-map.pdf','private-map.pdf','reordered-map.pdf','missing-map.pdf'])test('unsupported embedded-font '+name+' blocks approval and preserves the entire source',async()=>{
+ const bytes=pdfFixture(name),b=await stageSources([{name,expectedCount:3,base64:bytes.toString('base64')}]);
+ assert.equal(b.report.sourceCount,3);assert.equal(b.report.pass1,'blocked');assert.equal(b.report.selectedPass1,'blocked');assert.equal(b.report.pass2,'pending');assert.equal(b.report.added,0);
+ assert.equal(b.sources[0].base64,bytes.toString('base64'));assert.equal(b.sources[0].sha256,odiaHashes[name]);
+ const damagedItem=b.items.find(i=>i.unresolved.some(f=>f.stage==='structure'));
+ assert.ok(b.sources[0].errors.length||damagedItem,'Unsupported extraction must produce a visible blocking error/finding');
+ if(damagedItem)assert.throws(()=>reviewItem(b,{key:damagedItem.key,decision:'approve',reason:evidence}));
+});
+test('embedded-font source count mismatch cannot be hidden by otherwise valid Odia text',async()=>{
+ const bytes=pdfFixture('valid.pdf'),b=await stageSources([{name:'valid.pdf',expectedCount:4,base64:bytes.toString('base64')}]);
+ assert.equal(b.report.parsed,3);assert.equal(b.report.pass1,'blocked');assert.match(b.sources[0].errors.join(' '),/Expected 4; parsed 3/);assert.equal(b.sources[0].base64,bytes.toString('base64'));
+});
 test('100Q static HTML is exact and originals/options/Unicode remain accounted for',async()=>{
  const records=Array.from({length:100},(_,i)=>record(i+1));records[0].question_statement+=' ଓଡ଼ିଆ';const f=source(records),b=await stageSources([f]);
  assert.equal(b.report.parsed,100);assert.equal(b.report.added,0);assert.equal(b.report.removed,0);assert.equal(b.sources[0].base64,f.base64);assert.deepEqual(b.items[0].raw,records[0]);assert.match(b.items[0].working.text,/ଓଡ଼ିଆ/);assert.equal(b.report.pass2,'pending');

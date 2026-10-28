@@ -16,6 +16,16 @@ from the existing **HTML Imports** uploader. It never publishes a test automatic
 - Scanned/image-only pages, damaged PDFs, unsupported layouts, unexplained preambles
   and count discrepancies remain blocked. There is **no OCR** and no guessed answer
   or transcription. Use a supported export/transcription after inspecting the source.
+- Embedded-font selectable-text Odia is supported when the font's Unicode mapping
+  is usable. Extraction retains PDF.js text fragments and explicit word spacing;
+  shaping fragments and font changes never introduce spaces by themselves. It
+  preserves Unicode without rewriting/reordering marks. Detected ambiguous geometry,
+  private-use/replacement characters, invalid scalars, decoding controls and detectable
+  visual-order Odia mark/base mappings block extraction instead of being repaired.
+  Single-column horizontal LTR text is the reviewed layout. A font being embedded
+  (or having a ToUnicode map) is not proof of correct text: plausible but incorrect
+  mappings or omissions may still need visual/source comparison in Pass 2. Arbitrary
+  font maps and OCR are not certified by the synthetic embedded-font regressions.
 - The existing 2 MB HTTP request limit stays unchanged. Binary source bytes are
   limited to **1 MB combined** to allow base64/request overhead. PDF processing has
   a 500-page / 4 MB extracted-text safety budget. These are resource limits, not
@@ -159,3 +169,21 @@ tests, private archives, source banks and server credentials are not shipped.
   property/non-finite literal rejection. Browser and HTTP/database checks confirm
   malformed identities cannot install, while original bytes/records remain intact.
   The SQL migration was not changed by these parser fixes.
+
+## Local Odia PDF correction (2026-10-28, not committed)
+
+- 63 parser checks passed in Node and Deno; 251 full local automated checks passed
+  (including those 63 and the database/security lifecycle checks).
+- 64 targeted Admin/backend browser checks passed. The earlier 235-browser result
+  was preserved, not repeated or presented as a fresh full-browser run.
+- The same correctly mapped basic/wrapped fixtures improved from 20/35 matching
+  fields under the approved baseline to 35/35 after the correction. NFC equivalence
+  and ordinary line wrapping are allowed in comparisons; internal word spaces and
+  Odia marks are never removed to obtain a pass.
+- Four deliberately broken/missing font-map fixtures remain blocked with originals
+  intact. The original discovery PDFs still have unrecoverable mappings and remain
+  blocked; this correction does not invent their missing characters.
+- Edge type checking, 66 JS syntax checks, six JSON/manifest parses and the exact
+  35-file artifact audit passed. Synthetic PDFs/server code stay out of the artifact.
+- Hosted Edge behavior and production backup/recovery readiness remain unverified.
+  This local correction requires review and separate approval before commit/push.

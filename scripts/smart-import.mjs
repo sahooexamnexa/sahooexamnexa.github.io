@@ -70,6 +70,41 @@ export function parsePdfText(text){
   return q;
  });
 }
+// PDF.js text items are font/shaping fragments, not words. Keep their text and
+// explicit whitespace intact; inventing a separator corrupts Indic clusters.
+export function pdfPageText(content,pageNumber=1){
+ const lines=[];let line='',previous=null;
+ const unsupported=reason=>{throw Error('Unsupported PDF text on page '+pageNumber+': '+reason+'. Inspect/re-export the source; no characters or word breaks were guessed.');};
+ const flush=()=>{
+  // Check the complete line, not fragments that can start inside a valid cluster.
+  if(/(?:^|[^\p{L}\p{M}\p{N}])[\u0B3E-\u0B44\u0B47\u0B48\u0B4B\u0B4C\u0B55-\u0B57]+[\u0B15-\u0B39]/u.test(line))unsupported('ambiguous Odia mark/base order');
+  if(line)lines.push(line);line='';previous=null;
+ };
+ for(const item of content.items){
+  if(typeof item.str!=='string')continue;
+  if(!item.str){if(item.hasEOL)flush();continue;}
+  // Private-use/unmapped glyphs, invalid scalars and decoding controls are not
+  // reliable selectable text. Do not strip them or fabricate replacements.
+  for(const char of item.str){const cp=char.codePointAt(0);
+   if(cp===0xfffd||cp<=8||cp===11||cp===12||cp>=14&&cp<=31||cp>=0x7f&&cp<=0x9f
+    ||cp>=0xd800&&cp<=0xdfff||cp>=0xe000&&cp<=0xf8ff||cp>=0xfdd0&&cp<=0xfdef
+    ||cp>=0xf0000&&cp<=0xffffd||cp>=0x100000&&cp<=0x10fffd||(cp&0xffff)>=0xfffe)unsupported('unmapped/corrupt Unicode U+'+cp.toString(16).toUpperCase());
+  }
+  const t=item.transform,style=content.styles?.[item.fontName];
+  if(!Array.isArray(t)||t.length!==6||!t.every(Number.isFinite)||!Number.isFinite(item.width)||item.width<0
+   ||item.dir&&item.dir!=='ltr'||style?.vertical||t[0]<=0||t[3]<=0||Math.abs(t[1])>0.001)unsupported('non-horizontal/ambiguous text geometry');
+  const size=Math.max(Math.hypot(t[0],t[1]),Math.hypot(t[2],t[3]));
+  if(previous&&Math.abs(t[5]-previous.y)>3)flush();
+  if(previous&&t[4]<previous.x-size/2)unsupported('reading order moves backwards');
+  if(previous&&line&&!/\s$/u.test(line)&&!/^\s/u.test(item.str)){
+   if(t[4]-previous.end>Math.max(size,previous.size)/4)unsupported('word boundary is ambiguous');
+  }
+  line+=item.str;
+  previous={x:t[4],end:t[4]+item.width,y:t[5],size};
+  if(item.hasEOL)flush();
+ }
+ flush();return lines.join('\n');
+}
 export async function extractPdf(bytes){
  const {getDocumentProxy}=await import('unpdf');
  const pdf=await getDocumentProxy(new Uint8Array(bytes),{isEvalSupported:false,useSystemFonts:false,disableFontFace:true,stopAtErrors:true,verbosity:0});
@@ -77,9 +112,10 @@ export async function extractPdf(bytes){
   if(pdf.numPages>500)throw Error('PDF exceeds the 500-page processing safety limit; split the source.');
   const pages=[];let chars=0;
   for(let n=1;n<=pdf.numPages;n++){
-   const page=await pdf.getPage(n),content=await page.getTextContent();let lines=[],line='',lastY=null;
-   for(const item of content.items){if(typeof item.str!=='string')continue;const y=item.transform?.[5];if(lastY!==null&&Math.abs(y-lastY)>3&&line){lines.push(line);line='';}line+=(line?' ':'')+item.str;lastY=y;if(item.hasEOL){lines.push(line);line='';lastY=null;}}
-   if(line)lines.push(line);const text=lines.join('\n');if(!text.trim())throw Error('Unreadable/image-only page '+n+'; no OCR or invented transcription.');chars+=text.length;if(chars>4*1024*1024)throw Error('Extracted text exceeds safety budget; split source.');pages.push(text);page.cleanup();
+   const page=await pdf.getPage(n);
+   try{const content=await page.getTextContent({disableNormalization:true}),text=pdfPageText(content,n);
+    if(!text.trim())throw Error('Unreadable/image-only page '+n+'; no OCR or invented transcription.');chars+=text.length;if(chars>4*1024*1024)throw Error('Extracted text exceeds safety budget; split source.');pages.push(text);
+   }finally{page.cleanup();}
   }
   return pages.join('\n');
  }finally{await pdf.loadingTask.destroy();}
