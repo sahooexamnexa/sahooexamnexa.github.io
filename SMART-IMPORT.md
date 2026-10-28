@@ -133,16 +133,22 @@ create/update operations are not exposed by the HTTP action allowlist. Source
 parsing, filters and revisions are calculated server-side. Pre-submit option
 projection and authoritative scoring remain unchanged.
 
-For a separately approved release: review/apply only this migration, deploy the
-matching academy-api with pinned `unpdf@1.9.1`, then deploy the frontend. Verify
-runtime PDF resource limits using synthetic fixtures before real use. The new UI
-fails safely if the backend is not yet available; legacy HTML Imports stays usable.
-This development task does **not** perform these production steps.
+For a separately approved release, first establish verified backup and isolated
+restore readiness and refresh the actual production schema/data baseline. Verify
+the migration is absent, then apply only this migration once. Deploy the matching
+academy-api with its complete reachable module graph and pinned `unpdf@1.9.1`.
+Successful hosted synthetic checks are required before frontend release. Merging
+to main automatically triggers Pages, so merge only after those backend checks
+pass. The new UI fails safely if the backend is not yet available; legacy HTML
+Imports stays usable. This documentation update authorizes none of these steps.
 
 The static artifact contains only the UI module. Parser/PDF dependencies, SQL,
 tests, private archives, source banks and server credentials are not shipped.
 
-## Development verification (2026-10-23)
+## Recorded initial development verification (2026-10-23)
+
+These historical results predate the Odia PDF correction. The later correction
+results are recorded separately below; this documentation update reruns no suites.
 
 - 230 Node automated tests passed, including database/security/importer suites and
   42 Smart Import parser tests plus 11 staging database lifecycle checks (53 focused).
@@ -170,7 +176,18 @@ tests, private archives, source banks and server credentials are not shipped.
   malformed identities cannot install, while original bytes/records remain intact.
   The SQL migration was not changed by these parser fixes.
 
-## Local Odia PDF correction (2026-10-28, not committed)
+## Odia PDF correction (2026-10-28, committed and pushed)
+
+The reviewed correction was committed and pushed to `codex/smart-mcq-import-audit`
+as `55c350184b116496fb0cc1f5e047383d59a65fdf`, following the original reviewed
+implementation `b6f26aa201555bd0e2dc6961f2affe28d4183d75`. Its 12 files contain
+only the extraction correction, tests, documentation and nine synthetic fixtures.
+The complete Priority #6 PR #3 contains 26 changed files against production main
+`059f709d3e7d15858a0e7afe244cb8982f8f6c9d`.
+
+The following tests executed during correction validation before that commit.
+The final diff/remote reviews matched the tested patch and fixture hashes; neither
+those reviews nor this documentation update reran the completed suites.
 
 - 63 parser checks passed in Node and Deno; 251 full local automated checks passed
   (including those 63 and the database/security lifecycle checks).
@@ -185,5 +202,30 @@ tests, private archives, source banks and server credentials are not shipped.
   blocked; this correction does not invent their missing characters.
 - Edge type checking, 66 JS syntax checks, six JSON/manifest parses and the exact
   35-file artifact audit passed. Synthetic PDFs/server code stay out of the artifact.
-- Hosted Edge behavior and production backup/recovery readiness remain unverified.
-  This local correction requires review and separate approval before commit/push.
+- The correction is committed and independently reviewed; it is not deployed.
+
+## PR checks and unresolved release gates (2026-10-28)
+
+GitHub reported zero automated PR check runs and zero commit statuses for reviewed
+implementation `55c350184b116496fb0cc1f5e047383d59a65fdf`. The only workflow is
+Pages deployment on main (or manual dispatch gated to main); no PR test workflow
+is configured. Missing checks are not an automated approval or a failing test.
+The PR description records the current documentation head separately from the
+reviewed implementation and the dates of its existing local QA evidence.
+
+Hosted Supabase Edge PDF execution remains **UNVERIFIED**. Before frontend release,
+verify complete module packaging, pinned `unpdf` and its internal `unpdf/pdfjs`
+resolution, function startup, final bundle size, and cold/warm synthetic HTML,
+PDF, embedded-font Odia and mixed-source requests. Include unsupported inputs and
+near-limit cases, authorization/privacy checks, and CPU/memory/timeout behavior.
+The local byte/page/text limits do not prove compliance with hosted resource
+budgets; recheck the official hosted limits at release time. Do not weaken parsing
+or silently omit records to pass a resource check. Synthetic staging archives are
+immutable, so any smoke test that writes them needs approval to retain its audit.
+
+Production backup/recovery verification is **DEFERRED and UNRESOLVED**. A real
+owner-controlled recovery backup and successful isolated restoration have not
+been verified. Priority #6 is not complete or production-release-ready. Fresh
+production-state preflight and separate explicit release approval remain required;
+no migration, merge, backend/Pages deployment or production import is authorized
+by this documentation update.
