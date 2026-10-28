@@ -28,7 +28,7 @@ export function parseDataLiteral(source,start=0){
   return {data:literal(node),end:node.end};
 }
 function children(node){return Object.values(node).flatMap(v=>Array.isArray(v)?v.filter(n=>n?.type):v?.type?[v]:[]);}
-function extractArray(html){
+export function extractArray(html){
   const declarations=[],programs=[];
   // Consume comments as whole tokens so a commented-out example is not a bank.
   const tags=/<!--[\s\S]*?-->|<script\b([^>]*?)>/gi;
@@ -100,7 +100,7 @@ function validPypLabel(label){
   const match=/^(.+) (19\d{2}|20\d{2})$/.exec(label);
   return !!match&&match[0]===label&&PYP_NAMES.has(match[1]);
 }
-function sourcePypTags(record){
+export function sourcePypTags(record){
   const tags=Array.isArray(record.tags)?record.tags.filter(validPypLabel):[];
   const pyp=record.pyp;
   if(pyp&&!Array.isArray(pyp)&&typeof pyp==='object'&&typeof pyp.examId==='string'&&Object.hasOwn(PYP_EXAMS,pyp.examId)&&Number.isInteger(pyp.year)){

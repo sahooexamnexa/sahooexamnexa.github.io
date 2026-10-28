@@ -1,4 +1,5 @@
 import {verifyAttemptPolicyBrowser} from './attempt-policy-browser-checks.mjs';
+import {verifySmartImport} from './smart-import-browser-checks.mjs';
 import {verifyAdminOrdering} from './admin-order-browser-checks.mjs';
 import {verifyShuffleBrowser} from './shuffle-browser-checks.mjs';
 import {verifyHierarchy} from './hierarchy-browser-checks.mjs';
@@ -104,6 +105,7 @@ try{
   await page.locator('#question-search').fill('Edited manual fixture');await page.getByRole('button',{name:'Search / filter',exact:true}).click();await page.getByRole('button',{name:'Open Q1',exact:true}).click();await page.locator('[data-question-review] input[type=checkbox]').check();await page.locator('[data-question-review] textarea').fill('Reviewed every synthetic question, answer and explanation.');await page.getByRole('button',{name:'Approve manual content review'}).click();await page.getByText('Saved securely. Reloaded current records.',{exact:true}).waitFor();checks.push('Manual content review is a separate trusted operation; does not publish');
   await logout();await login('student');await go('admin/questions');await page.getByRole('heading',{name:'Admin sign-in required'}).waitFor();assert.equal(await page.locator('[data-question-save]').count(),0);checks.push('Student cannot open the Questions workspace');await logout();await login('admin');
   checks.push(...await verifyAdminOrdering({page,go,db,rpc,admin}));
+  checks.push(...await verifySmartImport({page,go,db,rpc,admin}));
   for(const width of [375,768,1280]){await page.setViewportSize({width,height:900});for(const r of ['admin/payments','admin/subjects','admin/imports','purchase/subject','test/free','account']){await go(r);await page.waitForTimeout(120);assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),'overflow '+width+' '+r);}}
   checks.push('Connected student/Admin routes fit phone, tablet and laptop widths');
   assert.equal(await page.locator('.sidebar a[href="#/admin"]').count(),1);

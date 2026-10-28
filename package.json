@@ -6,11 +6,11 @@
   "scripts": {
     "dev": "node server.mjs",
     "start": "node server.mjs",
-    "test": "node --test tests/unit.test.mjs tests/launch-access.test.mjs tests/source-array-import.test.mjs tests/exam-coming-soon.test.mjs",
+    "test": "node --test tests/unit.test.mjs tests/launch-access.test.mjs tests/source-array-import.test.mjs tests/exam-coming-soon.test.mjs tests/smart-import.test.mjs",
     "test:browser": "node tests/browser.mjs && node tests/launch-browser.mjs && node tests/launch-branding-browser.mjs",
     "check": "node --check app.js && node --check launch-access.js && node --check launch-views.js && node --test tests/unit.test.mjs tests/launch-access.test.mjs",
     "build": "node scripts/build-client.mjs",
-    "test:backend": "node --test tests/supabase-db.test.mjs tests/supabase-edge.test.mjs tests/manual-questions.test.mjs tests/import-upload.test.mjs tests/hierarchy.test.mjs tests/attempt-shuffle.test.mjs tests/admin-order-delete.test.mjs tests/attempt-policy.test.mjs",
+    "test:backend": "node --test tests/supabase-db.test.mjs tests/supabase-edge.test.mjs tests/manual-questions.test.mjs tests/import-upload.test.mjs tests/hierarchy.test.mjs tests/attempt-shuffle.test.mjs tests/admin-order-delete.test.mjs tests/attempt-policy.test.mjs tests/smart-import-db.test.mjs",
     "test:backend-browser": "node tests/supabase-browser.mjs && node tests/exam-coming-soon-browser.mjs",
     "build:pages": "node scripts/build-static.mjs",
     "preview:pages": "node scripts/preview-static.mjs",
@@ -20,7 +20,8 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "2.117.2",
-    "acorn": "8.15.0"
+    "acorn": "8.15.0",
+    "unpdf": "1.9.1"
   },
   "devDependencies": {
     "@electric-sql/pglite": "0.5.8",

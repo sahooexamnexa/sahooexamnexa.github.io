@@ -1,5 +1,6 @@
 import {automaticDurationSeconds,formatDuration,formatScore} from './attempt-policy.js';
 import {createQuestionViews} from './question-views.js';
+import {createSmartImportViews} from './smart-import-views.js';
 import {createOrderControls} from './order-controls.js';
 import {visibleCatalog,subjectPath,subjectExam,examHasPublishedTests} from './catalog-hierarchy.js';
 // Views for the real backend. Hidden buttons are convenience only; the server authorizes every call.
@@ -8,8 +9,9 @@ export function createBackendUI({gateway,access,launch,link,title,notice,escape,
   const e=escape, money=p=>'₹'+(p/100).toLocaleString('en-IN'),stamp=s=>s?new Date(s).toLocaleString('en-IN'):'—';
   const route=r=>{location.hash='/'+r;};
   const admin=()=>access.snapshot.status==='authenticated'&&access.snapshot.user?.role==='admin';
-  function clear(){cache=new Map();pending=new Set();editing=null;message='';questionViews.clear();}
+  function clear(){cache=new Map();pending=new Set();editing=null;message='';questionViews.clear();smartViews.clear();}
   function get(key,action,payload={}){if(cache.has(key))return cache.get(key);if(!pending.has(key)){const current=cache;pending.add(key);gateway.call(action,payload).then(value=>{if(current!==cache)return;cache.set(key,value);}).catch(()=>{if(current===cache)cache.set(key,{error:true});}).finally(()=>{if(current===cache){pending.delete(key);render();}});}return null;}
+  const smartViews=createSmartImportViews({gateway,get,escape:e,render,admin});
   const loading=()=>notice('Loading secure records…');
   const failure=()=>notice('The backend could not load this information. Confirm Supabase configuration and sign in again.',true);
   const status=()=>message?`<p class="notice" role="status">${e(message)}</p>`:'';
@@ -32,11 +34,13 @@ export function createBackendUI({gateway,access,launch,link,title,notice,escape,
     const options=entity==='subjects'?parents.exams:entity==='topics'?parents.subjects.map(s=>({...s,name:subjectPath(s,parents.exams)})):entity==='tests'?parents.topics.map(p=>({...p,name:subjectPath(parents.subjects.find(s=>s.id===p.subject_id),parents.exams)+' → '+p.name})):tests.map(t=>({...t,name:subjectPath(parents.subjects.find(s=>s.id===t.subject_id),parents.exams)+' → '+t.title}));
     return ordering.view(entity,options);
   }
+  adminTabs.push(['smart-imports','Smart HTML / PDF Audit']);
   function adminView(id){
     if(!gateway.realBackend||!admin())return locked();
     const aliases={'overview':'exams','pricing':'subjects','orders':'payment_submissions','payments':'payment_submissions','access':'entitlements','students':'profiles','html-imports':'imports','launch-settings':'admin_settings','settings':'admin_settings'};
     const section=aliases[id]||id||'exams',entity=adminTabs.some(([v])=>v===section)?section:'exams';
     if(entity==='questions')return title('PRIVATE ADMIN','Manage Sahoo ExamNexa','Private question management.')+`<nav class="chips admin-nav" aria-label="Admin sections">${adminTabs.map(([v,l])=>link('admin/'+v,l,'chip')).join('')}</nav>`+orderPanel(entity)+questionViews.view();
+    if(entity==='smart-imports')return title('PRIVATE ADMIN','Smart source review','Draft-only extraction, filtering and evidence-based review.')+`<nav class="chips admin-nav" aria-label="Admin sections">${adminTabs.map(([v,l])=>link('admin/'+v,l,'chip')).join('')}</nav>`+smartViews.view();
     const records=get('admin:'+entity,'adminList',{entity});
     const header=title('PRIVATE ADMIN','Manage Sahoo ExamNexa','Changes are saved through authenticated server operations.')+`<nav class="chips admin-nav" aria-label="Admin sections">${adminTabs.map(([v,l])=>link('admin/'+v,l,'chip')).join('')}</nav>`+status();
     if(!records)return header+loading();if(records.error)return header+failure();

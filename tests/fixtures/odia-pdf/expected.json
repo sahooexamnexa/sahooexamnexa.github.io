@@ -1,0 +1,66 @@
+{
+  "basic": [
+    {
+      "id": "1",
+      "text": "Which synthetic Odia label is ଓଡ଼ିଆ?",
+      "options": [
+        "ଓଡ଼ିଆ",
+        "ଭାଷା",
+        "ଘର",
+        "ଆ"
+      ],
+      "answer": "A",
+      "explanation": "This controlled synthetic source selects ଓଡ଼ିଆ and preserves ଭାଷା and ଘର as separate words."
+    },
+    {
+      "id": "2",
+      "text": "Which synthetic Odia number is ୧୨୩?",
+      "options": [
+        "୦୧୨",
+        "୧୨୩",
+        "୪୫୬",
+        "୭୮୯"
+      ],
+      "answer": "B",
+      "explanation": "The controlled synthetic answer is ୧୨୩. The source preserves all digits ୦୧୨୩୪୫୬୭୮୯."
+    },
+    {
+      "id": "3",
+      "text": "Which synthetic Odia consonant label is ଡ଼?",
+      "options": [
+        "ଓ",
+        "ଆ",
+        "ଡ଼",
+        "ଭାଷା"
+      ],
+      "answer": "C",
+      "explanation": "The controlled synthetic choice is ଡ଼. Its canonical Unicode equivalent must retain the same letter."
+    }
+  ],
+  "wrapped": [
+    {
+      "id": "1",
+      "text": "Which synthetic Odia label is ଓଡ଼ିଆ? This is controlled wrapped text containing ଓଡ଼ିଆ ଭାଷା ଘର and genuine word boundaries. This is controlled wrapped text containing ଓଡ଼ିଆ ଭାଷା ଘର and genuine word boundaries. This is controlled wrapped text containing ଓଡ଼ିଆ ଭାଷା ଘର and genuine word boundaries.",
+      "options": [
+        "ଓଡ଼ିଆ",
+        "ଭାଷା",
+        "ଘର",
+        "ଆ"
+      ],
+      "answer": "A",
+      "explanation": "This controlled synthetic source selects ଓଡ଼ିଆ and preserves ଭାଷା and ଘର as separate words. Wrapped explanation text must preserve ଓଡ଼ିଆ ଭାଷା ୧୨୩ without inventing characters or word breaks. Wrapped explanation text must preserve ଓଡ଼ିଆ ଭାଷା ୧୨୩ without inventing characters or word breaks."
+    },
+    {
+      "id": "2",
+      "text": "Which synthetic Odia number is ୧୨୩? This is controlled wrapped text containing ଓଡ଼ିଆ ଭାଷା ଘର and genuine word boundaries. This is controlled wrapped text containing ଓଡ଼ିଆ ଭାଷା ଘର and genuine word boundaries. This is controlled wrapped text containing ଓଡ଼ିଆ ଭାଷା ଘର and genuine word boundaries.",
+      "options": [
+        "୦୧୨",
+        "୧୨୩",
+        "୪୫୬",
+        "୭୮୯"
+      ],
+      "answer": "B",
+      "explanation": "The controlled synthetic answer is ୧୨୩. The source preserves all digits ୦୧୨୩୪୫୬୭୮୯. Wrapped explanation text must preserve ଓଡ଼ିଆ ଭାଷା ୧୨୩ without inventing characters or word breaks. Wrapped explanation text must preserve ଓଡ଼ିଆ ଭାଷା ୧୨୩ without inventing characters or word breaks."
+    }
+  ]
+}
