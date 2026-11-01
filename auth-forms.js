@@ -1,4 +1,5 @@
 // Presentation validation only. Supabase Auth owns credentials, codes and rate limits.
+export const registrationPasswordMinLength = 12;
 export const resendCooldownSeconds = 60;
 export const confirmationMessage = 'Check your email to confirm registration. Use the latest verification code or the confirmation link. If you already have an account, log in or reset your password.';
 export const normalizeEmail = value => typeof value === 'string' ? value.trim().toLowerCase() : '';
@@ -11,7 +12,7 @@ export function validateAuthFields(mode, values = {}) {
   if (mode === 'register') {
     const name = typeof values.displayName === 'string' ? values.displayName.trim() : '';
     if (!name || [...name].length > 120 || /[\u0000-\u001f\u007f]/u.test(name)) errors.displayName = 'Enter your full name, using up to 120 characters.';
-    if (typeof values.password !== 'string' || values.password.length < 8) errors.password = 'Use at least 8 characters for your new password.';
+    if (typeof values.password !== 'string' || values.password.length < registrationPasswordMinLength) errors.password = `Use at least ${registrationPasswordMinLength} characters for your new password.`;
     if (typeof values.confirmPassword !== 'string' || !values.confirmPassword.length) errors.confirmPassword = 'Confirm your password.';
     else if (values.password !== values.confirmPassword) errors.confirmPassword = 'The passwords do not match.';
   }

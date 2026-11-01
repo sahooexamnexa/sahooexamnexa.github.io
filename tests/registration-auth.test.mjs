@@ -33,6 +33,23 @@ for(const [name,change,field] of [
 test('login does not impose new registration length or confirmation on existing passwords',()=>{
   assert.deepEqual(validateAuthFields('login',{email:'fixture@example.invalid',password:'old123'}),{});
 });
+for(const length of [8,11])test('registration rejects '+length+' characters without sending credentials',async()=>{
+  let calls=0;const a=createLaunchAccess(fixture({register:async()=>{calls++;return {status:'email_confirmation_required'};}}));
+  await a.authenticate('register',{...credentials,password:'x'.repeat(length),confirmPassword:'x'.repeat(length)});
+  assert.equal(calls,0);assert.equal(a.snapshot.fieldErrors.password,'Use at least 12 characters for your new password.');assert.equal(a.snapshot.user,null);
+});
+test('exactly 12 characters passes registration while shorter existing passwords still log in',async()=>{
+  let sent;const a=createLaunchAccess(fixture({register:async input=>{sent=input;return {status:'email_confirmation_required'};}}));
+  await a.authenticate('register',{...credentials,password:'Synthetic12!',confirmPassword:'Synthetic12!'});
+  assert.equal(sent.password,'Synthetic12!');assert.deepEqual(a.snapshot.fieldErrors,{});assert.equal(a.snapshot.status,'anonymous');
+  assert.deepEqual(validateAuthFields('login',{email:credentials.email,password:'short'}),{});
+});
+test('registration guidance and HTML minimum agree with setup and recovery without restricting login',()=>{
+  const escape=value=>String(value);const views=createLaunchViews({link:()=>'',title:()=>'',notice:()=>'',escape,connected:true,access:{snapshot:{authForm:{},fieldErrors:{}}}});
+  const registration=views.auth(true,new URLSearchParams()),login=views.auth(false,new URLSearchParams());
+  assert.match(registration,/id="password"[^>]*minlength="12"/);assert.match(registration,/Use at least 12 characters\./);
+  assert.doesNotMatch(registration,/at least 8 characters|minlength="8"/);assert.doesNotMatch(login,/minlength=/);
+});
 for(const token of ['123456','12345678','1234567890'])test('configured '+token.length+' digit email codes are supported',()=>assert.deepEqual(validateEmailCode({email:credentials.email,token}),{}));
 for(const token of ['',123456,'12345','12345678901','12a456','１２３４５６','<script>'])test('invalid code shape '+JSON.stringify(token)+' is rejected',()=>assert.ok(validateEmailCode({email:credentials.email,token}).token));
 test('signup stays anonymous and never sends confirmation or forged privileges to the gateway',async()=>{

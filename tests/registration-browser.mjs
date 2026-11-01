@@ -73,6 +73,7 @@ try{
     for(const label of ['Full name','Email address','Password','Confirm password'])assert.equal(await page.getByLabel(label,{exact:true}).count(),1);
     assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));
     assert.equal(await page.locator('#confirm-password').getAttribute('autocomplete'),'new-password');
+    assert.equal(await page.locator('#password').getAttribute('minlength'),'12');
   });
   await check('empty fields fail locally with accessible errors and focus',async()=>{
     await page.locator('#auth-form button').click();await page.locator('[role=alert]').waitFor();assert.equal(state.calls.signup,0);assert.equal(await page.evaluate(()=>document.activeElement.id),'full-name');assert.equal(await page.locator('#email').getAttribute('aria-invalid'),'true');
@@ -148,6 +149,17 @@ try{
     await g.go('register?next='+encodeURIComponent('https://evil.invalid'));assert.equal(await g.page.locator('#auth-form').getAttribute('data-next'),'account');
   });
   await g.context.close();
+  const boundary=await scenario();
+  await check('12-character registration minimum rejects 8/11 locally and accepts exactly 12',async()=>{
+    await boundary.go('register');
+    for(const length of [8,11]){
+      await boundary.fill();await boundary.page.locator('#password').fill('x'.repeat(length));await boundary.page.locator('#confirm-password').fill('x'.repeat(length));await boundary.page.locator('#auth-form button').click();
+      await boundary.page.locator('#password-error').filter({hasText:'Use at least 12 characters'}).waitFor();assert.equal(boundary.state.calls.signup,0);assert.equal(await boundary.page.locator('#password').inputValue(),'');
+    }
+    await boundary.fill('Synthetic12!');await boundary.page.locator('#password').fill('Synthetic12!');await boundary.page.locator('#auth-form button').click();await boundary.page.getByRole('heading',{name:'Verify your email',exact:true}).waitFor();
+    assert.equal(boundary.state.calls.signup,1);assert.equal(boundary.state.signupBody.password,'Synthetic12!');assert.equal(await boundary.page.locator('#app').getAttribute('data-auth-status'),'anonymous');
+  });
+  await boundary.context.close();
   assert.deepEqual(errors,[]);assert.deepEqual(unexpected,[]);
   const result={passed:checks.length,failed:0,checks,errors,unexpectedRequests:unexpected,realEmailsSent:0,productionRequests:0};
   await fs.mkdir(new URL('../test-artifacts/',import.meta.url),{recursive:true});await fs.writeFile(new URL('../test-artifacts/registration-browser-results.json',import.meta.url),JSON.stringify(result,null,2));console.log(JSON.stringify(result,null,2));

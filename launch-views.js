@@ -1,4 +1,5 @@
 import {safeChannelUrl,subjectAccessLabel} from './launch-access.js';
+import {registrationPasswordMinLength} from './auth-forms.js';
 
 export function createLaunchViews({link,title,notice,escape,access,connected}){
   const destination=params=>{const next=params.get('next')||'account';return /^(test|purchase)\/[a-z0-9-]+(?:\?exam=[a-z0-9-]+)?$/.test(next)?next:'account';};
@@ -27,7 +28,7 @@ export function createLaunchViews({link,title,notice,escape,access,connected}){
     return `<section class="card auth-mvp">${title('STUDENT ACCOUNT',register?'Create your student account':'Log in','Use one account for free and premium mock tests.')}${statusMessage()}${Object.keys(errors).length?'<p class="auth-error-summary" role="alert">Please correct the highlighted fields.</p>':''}<form id="auth-form" novalidate data-mode="${register?'register':'login'}" data-next="${escape(next)}">
       ${register?field({id:'full-name',name:'displayName',label:'Full name',autocomplete:'name',value:fields.displayName,attributes:'maxlength="120"',hint:'Use the name you want displayed on your account.'}):''}
       ${field({id:'email',name:'email',label:'Email address',type:'email',autocomplete:register?'email':'username',value:fields.email,attributes:'maxlength="254" autocapitalize="none" spellcheck="false"',hint:'Use an email address you can access.'})}
-      ${field({id:'password',name:'password',label:'Password',type:'password',autocomplete:register?'new-password':'current-password',attributes:register?'minlength="8"':'',hint:register?'Use at least 8 characters. Your account may require a stronger password.':'Enter your existing account password.'})}
+      ${field({id:'password',name:'password',label:'Password',type:'password',autocomplete:register?'new-password':'current-password',attributes:register?`minlength="${registrationPasswordMinLength}"`:'',hint:register?`Use at least ${registrationPasswordMinLength} characters. Your account may require a stronger password.`:'Enter your existing account password.'})}
       ${register?field({id:'confirm-password',name:'confirmPassword',label:'Confirm password',type:'password',autocomplete:'new-password',hint:'Enter the same password again.'}):''}
       <button class="btn wide" ${disabled?'disabled':''}>${s.busy?'Please wait…':register?'Create account':'Log in'}${!connected?' · Backend required':''}</button>
     </form><div class="auth-actions">${!register?link('forgot-password','Forgot password?','text-link'):''}${authLink('verify-email',next,'Verify an email address')}</div><p class="mt">${register?'Already registered?':'New to Sahoo ExamNexa?'}</p>${authLink(register?'login':'register',next,register?'Log in':'Register')}<p class="mt muted">Confirm your email before starting a mock test. Existing account holders can log in or recover their password.</p></section>`;
