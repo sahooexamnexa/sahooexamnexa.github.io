@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "node server.mjs",
     "start": "node server.mjs",
-    "test": "node --test tests/unit.test.mjs tests/launch-access.test.mjs tests/source-array-import.test.mjs tests/exam-coming-soon.test.mjs",
+    "test": "node --test tests/unit.test.mjs tests/launch-access.test.mjs tests/source-array-import.test.mjs tests/exam-coming-soon.test.mjs tests/registration-auth.test.mjs",
+    "test:auth": "node --test tests/registration-auth.test.mjs tests/launch-access.test.mjs",
+    "test:auth-browser": "node tests/registration-browser.mjs",
     "test:browser": "node tests/browser.mjs && node tests/launch-browser.mjs && node tests/launch-branding-browser.mjs",
     "check": "node --check app.js && node --check launch-access.js && node --check launch-views.js && node --test tests/unit.test.mjs tests/launch-access.test.mjs",
     "build": "node scripts/build-client.mjs",

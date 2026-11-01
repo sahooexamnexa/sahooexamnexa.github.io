@@ -55,5 +55,14 @@
 
 /* Phone CBT: one timer, then question/controls, then the unchanged navigator. */
 @media(max-width:767px){.test-layout{grid-template-columns:minmax(0,1fr)}.test-layout .test-side{display:contents}.test-layout .test-timer{grid-row:1;background:#fff;border:1px solid var(--line);border-radius:var(--radius);padding:16px}.test-layout .live-question{grid-row:2}.test-layout .test-navigation{grid-row:3;background:#fff;border:1px solid var(--line);border-radius:var(--radius);padding:16px}}
+/* Registration and email verification: readable fields and touch targets at 320px. */
+.auth-mvp{width:100%;min-width:0;max-width:620px;margin-inline:auto;overflow-wrap:anywhere}
+.auth-mvp .field{min-width:0}.auth-mvp input{min-width:0;width:100%;font-size:16px}
+.auth-mvp [aria-invalid="true"]{border-color:#a13225}
+.auth-field-error{display:block;color:#922a20;font-size:13px;line-height:1.5;min-height:0}
+.auth-field-error:empty{display:none}.auth-error-summary{color:#922a20;font-weight:650}
+.auth-actions{display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-top:12px}
+.auth-verification [data-resend-code]{margin-top:12px}.auth-otp{letter-spacing:.15em;font-variant-numeric:tabular-nums}
+@media(max-width:400px){.auth-mvp{padding:20px 16px}.auth-mvp .btn{white-space:normal}.auth-actions>*{max-width:100%}}
 /* Admin ordering: handles support pointer drag; buttons/numeric positions remain accessible. */
 .order-panel{margin-bottom:24px}.order-list{list-style:none;padding:0}.order-list>li{display:flex;gap:12px;align-items:center;padding:16px 0;border-bottom:1px solid #dce3de}.order-label{flex:1;min-width:0;overflow-wrap:anywhere}.order-label small{display:block}.order-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:end}.order-actions form{display:flex;gap:8px;align-items:end}.order-actions input{width:80px}.order-handle{cursor:grab;touch-action:none}.delete-dialog{max-width:620px;width:calc(100% - 32px);max-height:90vh;overflow:auto;border:2px solid #963b36;border-radius:16px;padding:24px}.delete-dialog::backdrop{background:#0008}.delete-dialog label{display:block;margin:16px 0}.delete-dialog input,.delete-dialog textarea{width:100%}@media(max-width:767px){.order-list>li{flex-wrap:wrap}.order-label{flex-basis:60%}.order-actions{width:100%}.order-actions form{flex:1}.delete-dialog{padding:16px}}

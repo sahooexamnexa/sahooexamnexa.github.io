@@ -14,6 +14,7 @@ const app = document.querySelector('#app');
 const modal = document.querySelector('#modal');
 const state = { examFilter: 'All exams', examSearch: '', testFilter: 'All tests', testSearch: '', accessFilter: 'all', session: null, result: null, attempts: [], syllabus: new Set(), drafts: {}, adminSearch: '' };
 let timer;
+let verificationCountdown;
 let currentRoute = '';
 let modalOpener;
 const escape = value => String(value).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -240,9 +241,10 @@ function info(page) {
 function notFound(){return title('PAGE NOT FOUND','Let’s get you back on track.','This page or resource is not available.')+link('home','Back to overview','btn','arrow');}
 function offlineNotice(){return '<div class="offline-banner" role="status">You’re offline. New attempts require an online eligibility check. Offline reloading is not enabled yet.</div>';}
 function render() {
+  clearInterval(verificationCountdown);
   const raw=siteRoute(location,document.baseURI);
   const [path,query]=raw.split('?');const [page,id]=path.split('/');const params=new URLSearchParams(query || '');
-  const pages={'forgot-password':forgotPassword,home,exams:examList,exam:()=>examDetail(id),subjects:()=>subjectPage(params),subject:()=>commerce.subjectDetail(id,params)||notFound(),purchase:()=>commerce.purchase(id,params)||notFound(),orders:()=>commerce.orders()+launch.stateGuide(),account:()=>launch.account(),support:()=>management.support(),topic:()=>topicPage(id,params),syllabus:()=>syllabus(params),tests:()=>testList(params),test:()=>testPage(id,params),results:resultPage,dashboard,pyqs:()=>pyqs(params),login:()=>auth(false,params),register:()=>auth(true,params),pricing,admin:()=>admin(id),about:()=>info('about'),privacy:()=>info('privacy'),help:()=>info('help')};
+  const pages={'forgot-password':forgotPassword,'verify-email':()=>launch.verifyEmail(params),home,exams:examList,exam:()=>examDetail(id),subjects:()=>subjectPage(params),subject:()=>commerce.subjectDetail(id,params)||notFound(),purchase:()=>commerce.purchase(id,params)||notFound(),orders:()=>commerce.orders()+launch.stateGuide(),account:()=>launch.account(),support:()=>management.support(),topic:()=>topicPage(id,params),syllabus:()=>syllabus(params),tests:()=>testList(params),test:()=>testPage(id,params),results:resultPage,dashboard,pyqs:()=>pyqs(params),login:()=>auth(false,params),register:()=>auth(true,params),pricing,admin:()=>admin(id),about:()=>info('about'),privacy:()=>info('privacy'),help:()=>info('help')};
   const connectedView=state.session&&page==='test'?testRunner():state.result&&page==='results'?resultPage():live.view(page,id,params);
   let content=connectedView??(pages[page] ? pages[page]() : notFound());
   if(['exams','exam','topic','tests','dashboard'].includes(page)&&!content.includes('youtube-promotion'))content=launch.youtubePromotion()+content;
@@ -262,7 +264,16 @@ function render() {
   if(robots)robots.content=robots.dataset.publicHome==='true'&&indexableHome(location,document.baseURI)?'index, follow':'noindex, nofollow';
   const changed=currentRoute!==raw;currentRoute=raw;
   if(changed){window.scrollTo(0,0);document.querySelector('#main').focus({preventScroll:true});}
+  if(page==='verify-email')verificationCountdown=setInterval(updateVerificationCountdown,1000);
 }
+function updateVerificationCountdown(){
+  const button=document.querySelector('[data-resend-code]');if(!button)return;
+  const s=access.snapshot,remaining=s.verification?.resendSeconds||0;
+  button.disabled=!launchGateway.connected||s.busy||remaining>0;
+  button.textContent=remaining>0?`Resend code in ${remaining}s`:'Resend code';
+  const status=document.querySelector('[data-resend-status]');if(status)status.textContent=remaining>0?'Please wait before requesting another email.':'Did not receive an email? Check spam or request another confirmation.';
+}
+function focusAuthError(){document.querySelector('#auth-form [aria-invalid="true"],#email-verification-form [aria-invalid="true"]')?.focus();}
 function announce(message){document.querySelector('#announcer').textContent=message;}
 function showModal(heading,body,buttons) {
   modalOpener=document.activeElement;
@@ -279,6 +290,7 @@ document.addEventListener('click',async e=>{
   if(el.matches('.skip-link')){e.preventDefault();document.querySelector('#main').focus();document.querySelector('#main').scrollIntoView();return;}
   if(el.matches('.menu-button')){const open=!document.querySelector('.sidebar').classList.contains('open');document.querySelector('.sidebar').classList.toggle('open',open);document.querySelector('.sidebar').inert=!open;document.querySelector('.mobile-shade').classList.toggle('open',open);el.setAttribute('aria-expanded',String(open));if(open)document.querySelector('.sidebar a').focus();return;}
   if(el.matches('.mobile-shade')){closeMenu();return;}
+  if(el.hasAttribute('data-resend-code')){e.preventDefault();if(access.snapshot.busy)return;const form=el.closest('form'),email=new FormData(form).get('email');const pending=access.resendCode(email);render();await pending;render();focusAuthError();announce(access.snapshot.message);return;}
   if(el.tagName==='A' && el.getAttribute('href')?.startsWith('#/') && state.session && el.hash!==state.session.route){e.preventDefault();exitTest(el.hash);return;}
   if(el.dataset.orderTab){document.querySelectorAll('[data-order-tab]').forEach(b=>{const active=b===el;b.classList.toggle('active',active);b.setAttribute('aria-pressed',String(active));});document.querySelector('#purchase-tab-content').innerHTML=commerce.orderTab(el.dataset.orderTab);return;}
   if(el.dataset.importAction==='load'){management.loadDemo();return;}
@@ -327,7 +339,8 @@ document.addEventListener('change',e=>{
 });
 document.addEventListener('submit',async e=>{
   if(e.target.id==='forgot-password-form'){e.preventDefault();if(recoveryBusy)return;const email=new FormData(e.target).get('email').trim();recoveryBusy=true;recoveryMessage='';render();try{await launchGateway.requestPasswordReset(email);recoveryMessage='If this account is eligible, a recovery email has been sent. Check your inbox and spam folder; open only the newest link.';}catch{recoveryMessage='Recovery email could not be sent. Please wait before retrying or contact support.';}finally{recoveryBusy=false;render();}return;}
-  if(e.target.id==='auth-form'){e.preventDefault();const form=e.target,values=Object.fromEntries(new FormData(form)),mode=form.dataset.mode,next=form.dataset.next;form.reset();live.clear();const pending=access.authenticate(mode,values);render();await pending;if(access.snapshot.status==='authenticated')location.hash='/'+next;render();return;}
+  if(e.target.id==='auth-form'){e.preventDefault();if(access.snapshot.busy)return;const form=e.target,values=Object.fromEntries(new FormData(form)),mode=form.dataset.mode,next=launch.destination(new URLSearchParams({next:form.dataset.next}));form.reset();live.clear();const pending=access.authenticate(mode,values);render();await pending;if(access.snapshot.status==='authenticated')location.hash='/'+next;else if(access.snapshot.verification&&!Object.keys(access.snapshot.fieldErrors||{}).length)location.hash='/verify-email?next='+encodeURIComponent(next);render();focusAuthError();announce(access.snapshot.message);return;}
+  if(e.target.id==='email-verification-form'){e.preventDefault();if(access.snapshot.busy)return;const form=e.target,values=Object.fromEntries(new FormData(form)),next=launch.destination(new URLSearchParams({next:form.dataset.next}));form.reset();const pending=access.verifyEmail(values);render();await pending;if(access.snapshot.status==='authenticated')location.hash='/'+next;render();focusAuthError();announce(access.snapshot.message);return;}
   if(e.target.id==='import-edit-form'){e.preventDefault();management.saveDemo(e.target);announce('Demo edit applied. Structural verification repeated; content review remains pending.');return;}
 
   if(e.target.id==='admin-draft'){e.preventDefault();const name=e.target.dataset.collection;const values=[...new FormData(e.target).values()].map(v=>v.trim());if(values.some((v,i)=>!v && !adminConfig[name].fields[i][0].startsWith('Timer override'))){document.querySelector('#draft-message').textContent='Enter a non-empty value in every field.';return;}if(name==='Pricing'){const error=validateTestPrice('Paid / Premium',values[1]);if(error){document.querySelector('#draft-message').textContent=error;return;}}state.drafts[name] ||= [];state.drafts[name].push(values);document.querySelector('#admin-table').innerHTML=adminTable(name);document.querySelector('#draft-message').textContent='Draft preview added for this session. Nothing was published or saved to a database.';e.target.reset();}
